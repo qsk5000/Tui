@@ -600,26 +600,29 @@ window.acceptChallenge = async (chalId) => {
 };
 
 function saveStudyState() {
-  localStorage.setItem('mizan_study_sec',  studySec);
-  localStorage.setItem('mizan_study_time', Date.now());
-  localStorage.setItem('mizan_study_active','1');
+  // نحفظ الثواني المتراكمة الفعلية + وقت آخر حفظ
+  localStorage.setItem('mizan_study_sec',    studySec);
+  localStorage.setItem('mizan_study_saved',  Date.now()); // وقت الحفظ الأخير
+  localStorage.setItem('mizan_study_active', studyActive ? '1' : '0');
 }
 function clearStudyState() {
   localStorage.removeItem('mizan_study_sec');
-  localStorage.removeItem('mizan_study_time');
+  localStorage.removeItem('mizan_study_saved');
   localStorage.removeItem('mizan_study_active');
 }
 function restoreStudyTimer() {
-  const saved    = localStorage.getItem('mizan_study_sec');
-  const savedTime= localStorage.getItem('mizan_study_time');
-  const wasActive= localStorage.getItem('mizan_study_active');
-  if (saved && savedTime && wasActive) {
-    const elapsed = Math.floor((Date.now() - parseInt(savedTime)) / 1000);
-    studySec = parseInt(saved) + elapsed;
-    lastStudyTime = Date.now() - studySec * 1000;
-    if (studySec >= 60) {
-      startStudy();
-    }
+  const saved     = localStorage.getItem('mizan_study_sec');
+  const savedTime = localStorage.getItem('mizan_study_saved');
+  const wasActive = localStorage.getItem('mizan_study_active');
+  if (!saved || !savedTime) return;
+  // نرجّع فقط الثواني المحفوظة — بدون إضافة وقت الغياب
+  // (لو كان نشطاً ورجع، يبدأ العداد من نفس الرقم بدون قفز)
+  studySec = parseInt(saved) || 0;
+  lastStudyTime = Date.now() - studySec * 1000;
+  if (wasActive === '1' && studySec >= 60) {
+    startStudy();
+  } else {
+    renderClock();
   }
 }
 
@@ -680,15 +683,19 @@ function completeSession() {
 window.toggleStudy = () => { studyActive ? stopStudy() : startStudy(); };
 
 function startStudy() {
-  studyActive    = true;
-  lastStudyTime  = Date.now() - studySec * 1000;
+  studyActive     = true;
   threeHourWarned = false;
+  // نحفظ وقت بداية هذه الجلسة الفرعية فقط (لحساب ما مضى منذ آخر ضغطة start)
+  const segmentStart = Date.now();
+  const secAtStart   = studySec; // الثواني المتراكمة قبل هذه الجلسة الفرعية
   G('study-btn').classList.add('running');
   setText('study-lbl', sessionMode ? '⏹ استراحة' : '⏹ إيقاف الجلسة');
   G('timer-box').style.display = 'flex';
   renderClock();
   studyTick = setInterval(() => {
-    studySec = Math.floor((Date.now() - lastStudyTime) / 1000);
+    // الثواني = ما كان محفوظاً + ما مضى منذ آخر start
+    const elapsed = Math.floor((Date.now() - segmentStart) / 1000);
+    studySec = secAtStart + elapsed;
     renderClock();
     if (sessionMode) updateSessionInfo();
 
@@ -741,40 +748,64 @@ async function stopStudy() {
     studySec = 0; renderClock(); return;
   }
 
-  const pts  = Math.floor(studySec/60);
-  const subj = G('subj-sel').value;
+  const pts        = Math.floor(studySec/60);
+  const secs       = studySec;
+  const subj       = G('subj-sel').value;
   const sessionSecs = studySec;
 
-  await updateDoc(doc(db,'users',uid),    { totalPts:increment(pts), totalSec:increment(studySec) });
-  await updateDoc(doc(db,'squads',squadId),{ totalPts:increment(pts), totalSec:increment(studySec) });
+  // ✅ نصفّر فوراً قبل أي await — يمنع التكرار حتى لو النت مقطوع
+  studySec = 0;
+  renderClock();
 
-  const sqSnap = await getDoc(doc(db,'squads',squadId));
-  const sq = sqSnap.data();
-  if (sq.activeChallenges && sq.activeChallenges.length > 0) {
-    for (const chal of sq.activeChallenges) {
-      if (chal.status !== 'active') continue;
-      const isTeam1 = chal.team1Id === squadId;
-      const newPts = (isTeam1 ? chal.team1Pts : chal.team2Pts) + pts;
-      const chalIdx = sq.activeChallenges.findIndex(c => c.id === chal.id);
-      if (chalIdx !== -1) {
-        const updated = [...sq.activeChallenges];
-        if (isTeam1) updated[chalIdx].team1Pts = newPts;
-        else updated[chalIdx].team2Pts = newPts;
-        await updateDoc(doc(db,'squads',squadId), { activeChallenges: updated });
-      }
-    }
-  }
+  // نحفظ في queue محلي أولاً
+  const pending = JSON.parse(localStorage.getItem('mizan_pending_pts') || '[]');
+  pending.push({ pts, secs, subj, uid, squadId, ts: Date.now() });
+  localStorage.setItem('mizan_pending_pts', JSON.stringify(pending));
 
-  await setDoc(doc(collection(db,'sessions')),{
-    uid, squadId, subject:subj, seconds:studySec, pts, ts:serverTimestamp(), sessionMode, sessionTarget
-  });
-
+  toast('أحسنت! +'+pts+' نقطة ('+subj+') — جاري الحفظ...','ok');
   flash('+'+pts+' ⚡');
   const tip = getMizanTip(sessionSecs);
   setTimeout(() => toast('💬 ' + tip, 'ok'), 1000);
-  toast('أحسنت! +'+pts+' نقطة ('+subj+')','ok');
-  studySec = 0; renderClock();
+
+  // نرسل للسيرفر
+  await flushPendingPts();
 }
+
+// يرسل كل النقاط المحفوظة محلياً للسيرفر
+async function flushPendingPts() {
+  const pending = JSON.parse(localStorage.getItem('mizan_pending_pts') || '[]');
+  if (pending.length === 0) return;
+
+  const toSend = [...pending];
+  // نمسح القائمة أولاً قبل الإرسال لمنع التكرار
+  localStorage.removeItem('mizan_pending_pts');
+
+  try {
+    for (const entry of toSend) {
+      await updateDoc(doc(db,'users', entry.uid),    { totalPts:increment(entry.pts), totalSec:increment(entry.secs) });
+      await updateDoc(doc(db,'squads',entry.squadId), { totalPts:increment(entry.pts), totalSec:increment(entry.secs) });
+      await setDoc(doc(collection(db,'sessions')), {
+        uid: entry.uid, squadId: entry.squadId, subject: entry.subj,
+        seconds: entry.secs, pts: entry.pts, ts: serverTimestamp(),
+        sessionMode, sessionTarget
+      });
+    }
+  } catch(e) {
+    // لو فشل الإرسال، نرجع القائمة للـ localStorage
+    const stillPending = JSON.parse(localStorage.getItem('mizan_pending_pts') || '[]');
+    localStorage.setItem('mizan_pending_pts', JSON.stringify([...toSend, ...stillPending]));
+    toast('لا يوجد اتصال — ستُحفظ النقاط عند عودة النت 📶','warn');
+  }
+}
+
+// عند رجوع النت، ارسل النقاط المعلقة تلقائياً
+window.addEventListener('online', () => {
+  const pending = JSON.parse(localStorage.getItem('mizan_pending_pts') || '[]');
+  if (pending.length > 0) {
+    toast('رجع النت — جاري حفظ نقاطك 📶','ok');
+    flushPendingPts();
+  }
+});
 
 function renderClock() {
   const h = String(Math.floor(studySec/3600)).padStart(2,'0');
