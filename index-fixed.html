@@ -1,0 +1,1502 @@
+<!DOCTYPE html>
+
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>ميزان — Squads | السادس الإعدادي</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@300;400;500;700;800;900&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+
+<script type="module">
+import { initializeApp }      from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, browserLocalPersistence, setPersistence }
+                               from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+import { getFirestore, doc, setDoc, getDoc, updateDoc, increment, deleteDoc,
+         onSnapshot, collection, query, orderBy, serverTimestamp, where, arrayRemove, arrayUnion }
+                               from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+const firebaseConfig = {
+  apiKey:            "AIzaSyCY9GD6GtBuqBBerYjKETbI0Ftt_-oMshs",
+  authDomain:        "mizanacadyme.firebaseapp.com",
+  databaseURL:       "https://mizanacadyme-default-rtdb.firebaseio.com",
+  projectId:         "mizanacadyme",
+  storageBucket:     "mizanacadyme.firebasestorage.app",
+  messagingSenderId: "561300998665",
+  appId:             "1:561300998665:web:88e69e503c23da63e0c6d8",
+  measurementId:     "G-08606KYYNC"
+};
+
+const app  = initializeApp(firebaseConfig);
+const db   = getFirestore(app);
+const auth = getAuth(app);
+setPersistence(auth, browserLocalPersistence);
+
+let uid         = null;
+let squadId     = null;
+let studyActive = false;
+let studySec    = 0;
+let studyTick   = null;
+let lastStudyTime = 0;
+let threeHourWarned = false;
+
+const G       = id => document.getElementById(id);
+const setText = (id,v) => { const e=G(id); if(e) e.textContent=v; };
+const fmt     = n => n>=1000?(n/1000).toFixed(1)+'K':String(n);
+const fmtH    = s => s>=3600?(s/3600).toFixed(1)+'س':s>=60?Math.floor(s/60)+'د':s+'ث';
+window.toast  = (msg,type='info') => {
+  const t=G('toast'); t.textContent=msg; t.className='toast show t-'+type;
+  clearTimeout(t._t); t._t=setTimeout(()=>t.classList.remove('show'),4000);
+};
+
+const SUBJECTS = {
+  'علمي': ['📐 رياضيات','⚗️ كيمياء','🔬 فيزياء','🧬 أحياء','📖 عربي','🌍 إنجليزي'],
+  'أدبي': ['📖 عربي','🌍 إنجليزي','📜 تاريخ','🌐 جغرافية','💰 اقتصاد','⚖️ تربية وطنية']
+};
+const BADGES = ['🛡️','⚔️','🦅','🔥','🌟','💎','🦁','🚀','🏹','🌊','🐉','⚡'];
+
+const CHALLENGE_STATES = {
+  pending: { label: '⏳ في الانتظار', color: '#fbbf24' },
+  active: { label: '🔥 جارٍ', color: '#f87171' },
+  completed: { label: '✅ اكتمل', color: '#4ade80' },
+  expired: { label: '⏰ انتهت', color: '#94a3b8' }
+};
+
+function getStudentRank(pts) {
+  if (pts <= 100)  return { title: 'المكافح',           icon: '💪', msg: 'بداية الطريق، استمر!' };
+  if (pts <= 500)  return { title: 'المجتهد',           icon: '📚', msg: 'ماشي بالطريق الصح!' };
+  if (pts <= 1000) return { title: 'الدكتور',           icon: '🎓', msg: 'هيبة وشطارة، عاش!' };
+  return                  { title: 'أسطورة الـ 2026',  icon: '🏆', msg: 'أنت فوق المستوى!' };
+}
+
+const mizanTips = [
+  'عاش يدك يا بطل، الإصرار يوصلك للقمة 🔥',
+  'ترا السادس رحلة مو سباق، خطوة خطوة تفرق',
+  'الفرق الوحيد بين الناجح وغيره هو الثبات — ثبت!',
+  'حتى لو الجلسة صغيرة، أهم شي ما انقطعت',
+  'يا عين أمك، شوف كيف تتقدم كل يوم 💪',
+  'غداً راح تشكر نفسك على يوم اليوم',
+  'مو لازم تكون مثالي، لازم تكون مستمر فقط',
+  'كل دقيقة تدرسها هي نقطة تفرق في المحصلة'
+];
+const mizanTipsLong = [
+  'والله ثلاث ساعات مو شي بسيط، أنت من المجتهدين الحقيقيين 🏆',
+  'ما شاء الله عليك، جلسة طويلة تدل على همة عالية!',
+  'هذا النوع من التركيز نادر، محافظ عليه يا أسطورة!'
+];
+
+function getMizanTip(sessionSecs) {
+  if (sessionSecs > 7200) {
+    return mizanTipsLong[Math.floor(Math.random() * mizanTipsLong.length)];
+  }
+  return mizanTips[Math.floor(Math.random() * mizanTips.length)];
+}
+
+onAuthStateChanged(auth, async u => {
+  if (!u) {
+    goScreen('s-auth');
+    const logoutBtn = document.getElementById('logout-btn');
+    const userInfo  = document.getElementById('top-user-info');
+    if (logoutBtn) logoutBtn.style.display = 'none';
+    if (userInfo)  userInfo.style.display  = 'none';
+    return;
+  }
+  uid = u.uid;
+  const logoutBtn = document.getElementById('logout-btn');
+  const userInfo  = document.getElementById('top-user-info');
+  if (logoutBtn) logoutBtn.style.display = 'block';
+  if (userInfo)  userInfo.style.display  = 'block';
+  await boot();
+});
+
+async function boot() {
+  const snap = await getDoc(doc(db,'users',uid));
+  if (!snap.exists()) { goScreen('s-register'); return; }
+  const d = snap.data();
+  if (!d.squadId) { prefillLobby(d); goScreen('s-lobby'); return; }
+  squadId = d.squadId;
+  goScreen('s-squad');
+  bootSquad();
+  restoreStudyTimer();
+}
+
+window.switchAuth = (mode) => {
+  G('auth-login').style.display  = mode === 'login'  ? 'block' : 'none';
+  G('auth-signup').style.display = mode === 'signup' ? 'block' : 'none';
+};
+
+window.doLogin = async () => {
+  const email = G('login-email').value.trim();
+  const pass  = G('login-pass').value;
+  if (!email || !pass) return toast('أدخل البريد وكلمة السر','err');
+  try {
+    G('login-btn').disabled = true;
+    G('login-btn').textContent = '⏳ جاري الدخول…';
+    await signInWithEmailAndPassword(auth, email, pass);
+    toast('تم الدخول بنجاح! 🎉','ok');
+  } catch(e) {
+    const msg = e.code === 'auth/user-not-found'   ? 'البريد غير موجود' :
+                e.code === 'auth/wrong-password'   ? 'كلمة السر خاطئة'  :
+                e.code === 'auth/invalid-email'    ? 'البريد غير صحيح'  :
+                e.code === 'auth/invalid-credential' ? 'البريد أو كلمة السر خاطئة' : 'خطأ في الدخول';
+    toast(msg,'err');
+  } finally {
+    G('login-btn').disabled = false;
+    G('login-btn').textContent = '🔓 دخول';
+  }
+};
+
+window.doGoogleLogin = async () => {
+  try {
+    G('google-btn').disabled = true;
+    G('google-btn').textContent = '⏳ جاري الاتصال بجوجل…';
+    const provider = new GoogleAuthProvider();
+    provider.setCustomParameters({ prompt: 'select_account' });
+    const result = await signInWithPopup(auth, provider);
+    const user = result.user;
+    const snap = await getDoc(doc(db,'users',user.uid));
+    if (!snap.exists()) {
+      await setDoc(doc(db,'users',user.uid), {
+        name: user.displayName || 'طالب',
+        email: user.email,
+        branch: 'علمي',
+        totalPts: 0,
+        totalSec: 0,
+        squadId: null,
+        createdAt: serverTimestamp()
+      });
+    }
+    toast('تم الدخول بنجاح! 🎉','ok');
+  } catch(e) {
+    const msg = e.code === 'auth/popup-blocked' ? 'تم حجب النافذة المنبثقة' :
+                e.code === 'auth/popup-closed-by-user' ? 'تم إغلاق نافذة جوجل' : 'خطأ في الدخول';
+    toast(msg,'err');
+  } finally {
+    G('google-btn').disabled = false;
+    G('google-btn').textContent = '🔵 دخول بجوجل';
+  }
+};
+
+window.doSignup = async () => {
+  const name   = G('signup-name').value.trim();
+  const email  = G('signup-email').value.trim();
+  const pass   = G('signup-pass').value;
+  const pass2  = G('signup-pass2').value;
+  const branch = G('signup-branch').value;
+
+  if (!name || !email || !pass || !pass2) return toast('أملأ جميع الحقول','err');
+  if (pass.length < 6)  return toast('كلمة السر يجب أن تكون 6 أحرف على الأقل','err');
+  if (pass !== pass2)   return toast('كلمات السر غير متطابقة','err');
+
+  try {
+    G('signup-btn').disabled = true;
+    G('signup-btn').textContent = '⏳ جاري التسجيل…';
+    const res = await createUserWithEmailAndPassword(auth, email, pass);
+    await setDoc(doc(db,'users',res.user.uid), {
+      name, email, branch, totalPts:0, totalSec:0, squadId:null, createdAt:serverTimestamp()
+    });
+    toast('تم التسجيل بنجاح! 🎉','ok');
+  } catch(e) {
+    const msg = e.code === 'auth/email-already-in-use' ? 'البريد مستخدم بالفعل' :
+                e.code === 'auth/invalid-email' ? 'البريد غير صحيح' :
+                e.code === 'auth/weak-password' ? 'كلمة السر ضعيفة' : 'خطأ في التسجيل';
+    toast(msg,'err');
+  } finally {
+    G('signup-btn').disabled = false;
+    G('signup-btn').textContent = '🚀 تسجيل';
+  }
+};
+
+window.doGoogleSignup = async () => {
+  try {
+    G('signup-google-btn').disabled = true;
+    G('signup-google-btn').textContent = '⏳ جاري الاتصال بجوجل…';
+    const provider = new GoogleAuthProvider();
+    provider.setCustomParameters({ prompt: 'select_account' });
+    const result = await signInWithPopup(auth, provider);
+    const user = result.user;
+    const snap = await getDoc(doc(db,'users',user.uid));
+    if (!snap.exists()) {
+      await setDoc(doc(db,'users',user.uid), {
+        name: user.displayName || 'طالب',
+        email: user.email,
+        branch: 'علمي',
+        totalPts: 0,
+        totalSec: 0,
+        squadId: null,
+        createdAt: serverTimestamp()
+      });
+    }
+    toast('تم التسجيل بنجاح! 🎉','ok');
+  } catch(e) {
+    const msg = e.code === 'auth/popup-blocked' ? 'تم حجب النافذة المنبثقة' :
+                e.code === 'auth/popup-closed-by-user' ? 'تم إغلاق نافذة جوجل' : 'خطأ في التسجيل';
+    toast(msg,'err');
+  } finally {
+    G('signup-google-btn').disabled = false;
+    G('signup-google-btn').textContent = '🔵 تسجيل بجوجل';
+  }
+};
+
+window.doLogout = async () => {
+  try {
+    await signOut(auth);
+    toast('تم تسجيل الخروج','ok');
+  } catch(e) {
+    toast('خطأ في الخروج','err');
+  }
+};
+
+window.doRegister = async () => {
+  const name   = G('r-name').value.trim();
+  const branch = G('r-branch').value;
+  if (!name) return toast('اكتب اسمك الكامل','err');
+  await updateDoc(doc(db,'users',uid), { name, branch });
+  prefillLobby({ name, branch });
+  toast('أهلاً ' + name + ' 🎉','ok');
+  goScreen('s-lobby');
+};
+
+function prefillLobby(d) {
+  G('lobby-hello').textContent  = 'مرحباً، ' + d.name + ' 👋';
+  G('lobby-branch').textContent = d.branch === 'علمي' ? '🔬 الفرع العلمي' : '📖 الفرع الأدبي';
+}
+
+window.doCreate = async () => {
+  const name = G('c-name').value.trim();
+  if (!name || name.length < 2 || name.length > 22) return toast('اسم الفريق بين 2-22 حرف','err');
+  let code, exists=true, t=0;
+  while (exists && t<12) {
+    code = 'mizan' + Math.floor(1000+Math.random()*9000);
+    exists = (await getDoc(doc(db,'squads',code))).exists();
+    t++;
+  }
+  const badge = BADGES[Math.floor(Math.random()*BADGES.length)];
+  await setDoc(doc(db,'squads',code), {
+    name, badge, code,
+    members:[uid],
+    ownerId: uid,
+    totalPts:0, totalSec:0,
+    createdAt:serverTimestamp(),
+    activeChallenges:[]
+  });
+  await updateDoc(doc(db,'users',uid), { squadId:code });
+  squadId = code;
+  goScreen('s-squad'); bootSquad();
+  toast('تم إنشاء الفريق! 🛡️','ok');
+};
+
+window.doJoin = async () => {
+  let raw = G('j-code').value.trim().toLowerCase().replace(/\s/g,'');
+  const code = raw.startsWith('mizan') ? raw : 'mizan'+raw;
+  const snap = await getDoc(doc(db,'squads',code));
+  if (!snap.exists()) return toast('الكود غير صحيح ❌','err');
+  const sq = snap.data();
+  if (sq.members.length >= 5)        return toast('الفريق ممتلئ (5/5)','err');
+  if (sq.members.includes(uid))      return toast('أنت في الفريق بالفعل','warn');
+  await updateDoc(doc(db,'squads',code), { members:[...sq.members,uid] });
+  await updateDoc(doc(db,'users',uid),   { squadId:code });
+  squadId = code;
+  goScreen('s-squad'); bootSquad();
+  toast('انضممت لـ '+ sq.name +' 🎯','ok');
+};
+
+window.loadAvailableSquads = () => {
+  onSnapshot(collection(db,'squads'), async snap => {
+    const avail = [];
+    for (const d of snap.docs) {
+      const sq = d.data();
+      if (sq.members && sq.members.length < 5 && !sq.members.includes(uid)) {
+        avail.push({ id: d.id, ...sq });
+      }
+    }
+    const el = G('available-squads-wrap');
+    if (!el) return;
+    el.innerHTML = '';
+    if (avail.length === 0) {
+      el.innerHTML = '<div style="text-align:center;color:var(--ink3);padding:1rem;font-size:.85rem">لا توجد فرق متاحة حالياً 🏁</div>';
+      return;
+    }
+    avail.forEach(sq => {
+      const spots = 5 - (sq.members?.length || 0);
+      el.innerHTML += `<div class="avail-sq">
+        <div class="as-hd">
+          <span class="as-badge">${sq.badge || '🛡️'}</span>
+          <span class="as-nm">${sq.name}</span>
+        </div>
+        <div class="as-info">
+          <span class="as-members">👥 ${sq.members?.length || 0}/5</span>
+          <span class="as-pts">⚡ ${fmt(sq.totalPts||0)}</span>
+        </div>
+        <button class="btn btn-t" style="margin:0;font-size:.85rem;padding:.7rem" onclick="quickJoin('${sq.id}')">انضم الآن</button>
+      </div>`;
+    });
+  });
+};
+
+window.quickJoin = async (code) => {
+  const snap = await getDoc(doc(db,'squads',code));
+  if (!snap.exists()) return toast('الفريق محذوف','err');
+  const sq = snap.data();
+  if (sq.members.length >= 5)   return toast('الفريق امتلأ','err');
+  if (sq.members.includes(uid)) return toast('أنت في الفريق بالفعل','warn');
+  await updateDoc(doc(db,'squads',code), { members:[...sq.members,uid] });
+  await updateDoc(doc(db,'users',uid),   { squadId:code });
+  squadId = code;
+  goScreen('s-squad'); bootSquad();
+  toast('انضممت لـ '+ sq.name +' 🎯','ok');
+};
+
+window.leaveSquad = async () => {
+  if (!confirm('هل أنت متأكد من مغادرة الفريق؟ لن تفقد نقاطك الشخصية.')) return;
+  try {
+    const sqSnap = await getDoc(doc(db,'squads',squadId));
+    if (!sqSnap.exists()) {
+      await updateDoc(doc(db,'users',uid), { squadId: null });
+      squadId = null;
+      goScreen('s-lobby');
+      const uSnap = await getDoc(doc(db,'users',uid));
+      prefillLobby(uSnap.data());
+      return;
+    }
+    const sq = sqSnap.data();
+    const newMembers = sq.members.filter(m => m !== uid);
+    if (newMembers.length === 0) {
+      await deleteDoc(doc(db,'squads',squadId));
+    } else {
+      const updates = { members: newMembers };
+      if (sq.ownerId === uid) updates.ownerId = newMembers[0];
+      await updateDoc(doc(db,'squads',squadId), updates);
+    }
+    await updateDoc(doc(db,'users',uid), { squadId: null });
+    squadId = null;
+    stopStudyQuiet();
+    goScreen('s-lobby');
+    const uSnap = await getDoc(doc(db,'users',uid));
+    prefillLobby(uSnap.data());
+    toast('غادرت الفريق 👋','ok');
+  } catch(e) {
+    console.error(e);
+    toast('خطأ في المغادرة','err');
+  }
+};
+
+window.kickMember = async (targetUid) => {
+  if (!confirm('هل تريد طرد هذا العضو من الفريق؟')) return;
+  try {
+    const sqSnap = await getDoc(doc(db,'squads',squadId));
+    if (!sqSnap.exists()) return;
+    const sq = sqSnap.data();
+    if (sq.ownerId !== uid) return toast('فقط القائد يستطيع الطرد','err');
+    const newMembers = sq.members.filter(m => m !== targetUid);
+    await updateDoc(doc(db,'squads',squadId), { members: newMembers });
+    await updateDoc(doc(db,'users',targetUid), { squadId: null });
+    toast('تم طرد العضو ✅','ok');
+  } catch(e) {
+    console.error(e);
+    toast('خطأ في الطرد','err');
+  }
+};
+
+function bootSquad() {
+  onSnapshot(doc(db,'squads',squadId), async snap => {
+    if (!snap.exists()) {
+      await updateDoc(doc(db,'users',uid), { squadId: null }).catch(()=>{});
+      squadId = null;
+      goScreen('s-lobby');
+      const uSnap = await getDoc(doc(db,'users',uid));
+      if (uSnap.exists()) prefillLobby(uSnap.data());
+      return;
+    }
+    const sq = snap.data();
+    const isOwner = sq.ownerId === uid;
+
+    setText('sq-name',  sq.badge+' '+sq.name);
+    setText('sq-code',  sq.code||squadId);
+    setText('sq-count', sq.members.length+'/5 أعضاء');
+    setText('sq-pts',   fmt(sq.totalPts||0));
+    setText('sq-hrs',   fmtH(sq.totalSec||0));
+
+    const leaveBtn = G('leave-squad-btn');
+    if (leaveBtn) leaveBtn.style.display = 'block';
+
+    // تحديث التحديات
+    const chalWrap = G('challenges-wrap');
+    if (chalWrap) {
+      chalWrap.innerHTML = '';
+      const now = new Date();
+      let validChallenges = [];
+      if (sq.activeChallenges && sq.activeChallenges.length > 0) {
+        for (const chal of sq.activeChallenges) {
+          if (now <= new Date(chal.endsAt)) validChallenges.push(chal);
+        }
+        if (validChallenges.length < sq.activeChallenges.length) {
+          await updateDoc(doc(db,'squads',squadId), { activeChallenges: validChallenges }).catch(()=>{});
+        }
+      }
+      if (validChallenges.length === 0) {
+        chalWrap.innerHTML = '<div class="empty-msg">لا توجد تحديات حالياً 🏁</div>';
+      } else {
+        for (const chal of validChallenges) {
+          try {
+            const isTeam1 = chal.team1Id === squadId;
+            const myPts = isTeam1 ? chal.team1Pts : chal.team2Pts;
+            const oppPts = isTeam1 ? chal.team2Pts : chal.team1Pts;
+            const leadBy = Math.abs(myPts - oppPts);
+            const isWinning = myPts > oppPts;
+            
+            const status = chal.status || 'pending';
+            const statusBadge = status === 'pending' ? '⏳ في الانتظار' :
+                                status === 'active'  ? '🔥 جارٍ'        : '✅ اكتمل';
+            const endTime = new Date(chal.endsAt);
+            const remaining = Math.max(0, Math.floor((endTime - now) / 1000));
+            const rH = Math.floor(remaining/3600);
+            const rM = Math.floor((remaining%3600)/60);
+            const timeStr = rH > 0 ? `${rH}س ${rM}د` : `${rM}د`;
+            
+            chalWrap.innerHTML += `<div class="challenge-card ${isWinning ? 'winning' : 'losing'}">
+              <div class="chal-hd">
+                <div class="chal-teams">
+                  <span class="ct-badge">${isTeam1 ? chal.team1Badge : chal.team2Badge}</span>
+                  <span class="ct-name">${sq.name}</span>
+                  <span class="ct-vs">VS</span>
+                  <span class="ct-badge">${isTeam1 ? chal.team2Badge : chal.team1Badge}</span>
+                </div>
+                <span class="chal-status">${statusBadge}</span>
+              </div>
+              <div class="chal-score">
+                <div class="cs-unit">
+                  <div class="cs-pts">${myPts}</div>
+                  <div class="cs-lbl">نقاطك</div>
+                </div>
+                <div class="cs-diff ${isWinning ? 'leading' : 'trailing'}">
+                  ${isWinning ? '+' : '-'}${leadBy}
+                </div>
+                <div class="cs-unit">
+                  <div class="cs-pts">${oppPts}</div>
+                  <div class="cs-lbl">المنافس</div>
+                </div>
+              </div>
+              <div class="chal-time">⏱ ${timeStr}</div>
+              ${status === 'pending' && !isTeam1 ? `<button class="btn btn-action" onclick="acceptChallenge('${chal.id}')">✅ قبول</button>` : ''}
+            </div>`;
+          } catch(e) { console.error(e); }
+        }
+      }
+    }
+
+    // عرض الأعضاء
+    const wrap = G('members-wrap');
+    if (wrap) {
+      wrap.innerHTML = '';
+      for (const mid of sq.members) {
+        const us = await getDoc(doc(db,'users',mid));
+        if (!us.exists()) continue;
+        const u = us.data(), me = mid === uid;
+        const pct = sq.totalPts ? Math.round((u.totalPts||0)/sq.totalPts*100) : 0;
+        const rank = getStudentRank(u.totalPts||0);
+        const d = document.createElement('div');
+        d.className = 'mc'+(me?' is-me':'');
+        d.innerHTML = `
+          <div class="mc-av">${u.name[0]}</div>
+          <div class="mc-body">
+            <div class="mc-name">${u.name}${me?'<span class="me-chip">أنت</span>':''}
+              <span class="rank-chip">${rank.icon} ${rank.title}</span>
+            </div>
+            <div class="mc-sub">${u.branch==='علمي'?'🔬 علمي':'📖 أدبي'} · السادس الإعدادي</div>
+            <div class="mc-bar"><div class="mc-fill" style="width:${pct}%"></div></div>
+          </div>
+          <div class="mc-r">
+            <div class="mc-pts">⚡${fmt(u.totalPts||0)}</div>
+            <div class="mc-hrs">${fmtH(u.totalSec||0)}</div>
+            ${isOwner && !me ? `<button class="kick-btn" onclick="kickMember('${mid}')">❌ طرد</button>` : ''}
+          </div>`;
+        wrap.appendChild(d);
+      }
+    }
+  });
+
+  // Leaderboard
+  const lbQ = query(collection(db,'squads'), orderBy('totalPts','desc'));
+  onSnapshot(lbQ, snap => {
+    const el = G('lb-wrap');
+    if (!el) return;
+    el.innerHTML = '';
+    const M = ['🥇','🥈','🥉'];
+    snap.docs.forEach((d,i) => {
+      const sq = d.data(), mine = d.id === squadId;
+      el.innerHTML += `<div class="lb-row${mine?' mine':''}">
+        <span class="lb-pos">${M[i]||'#'+(i+1)}</span>
+        <div class="lb-mid"><span class="lb-nm">${sq.badge} ${sq.name}</span><span class="lb-ct">${(sq.members||[]).length} أعضاء</span></div>
+        <div class="lb-end"><span class="lb-p">⚡${fmt(sq.totalPts||0)}</span><span class="lb-h">⏱${fmtH(sq.totalSec||0)}</span></div>
+      </div>`;
+    });
+    if (snap.empty) el.innerHTML = '<div class="lb-empty">لا توجد فرق بعد 🏁</div>';
+  });
+
+  // تصنيف الأفراد
+  const soloQ = query(collection(db,'users'), orderBy('totalPts','desc'));
+  onSnapshot(soloQ, snap => {
+    const el = G('lb-solo-wrap');
+    if (!el) return;
+    el.innerHTML = '';
+    const M = ['🥇','🥈','🥉'];
+    let rank = 0;
+    snap.docs.forEach((d,i) => {
+      const u = d.data();
+      if (!(u.totalPts > 0) && !(u.totalSec > 0)) return;
+      rank++;
+      const me = d.id === uid;
+      const r  = getStudentRank(u.totalPts||0);
+      el.innerHTML += `<div class="lb-row${me?' mine':''}">
+        <span class="lb-pos">${M[rank-1]||'#'+rank}</span>
+        <div class="lb-mid">
+          <span class="lb-nm">${u.name||'طالب'}</span>
+          <span class="lb-ct">${r.icon} ${r.title} · ${u.branch==='علمي'?'🔬 علمي':'📖 أدبي'}${u.squadId?'':' · <span style="color:var(--amber)">بدون فريق</span>'}</span>
+        </div>
+        <div class="lb-end"><span class="lb-p">⚡${fmt(u.totalPts||0)}</span><span class="lb-h">⏱${fmtH(u.totalSec||0)}</span></div>
+      </div>`;
+    });
+    if (rank === 0) el.innerHTML = '<div class="lb-empty">لا توجد بيانات بعد 🏁</div>';
+  });
+
+  // بيانات المستخدم الشخصية
+  onSnapshot(doc(db,'users',uid), snap => {
+    if (!snap.exists()) return;
+    const u = snap.data();
+    setText('my-pts', fmt(u.totalPts||0));
+    setText('my-hrs', fmtH(u.totalSec||0));
+
+    const rank = getStudentRank(u.totalPts||0);
+    const userInfo = G('top-user-info');
+    if (userInfo) userInfo.textContent = `${rank.icon} ${u.name} — ${rank.title}`;
+
+    const sel = G('subj-sel');
+    if (sel) {
+      sel.innerHTML = '';
+      (SUBJECTS[u.branch]||SUBJECTS['علمي']).forEach(s => {
+        const o = document.createElement('option'); o.value = s; o.textContent = s; sel.appendChild(o);
+      });
+    }
+  });
+}
+
+window.openChallengeModal = async () => {
+  G('challenge-modal').style.display = 'flex';
+  await loadOpponentSquads();
+};
+window.closeChallengeModal = () => {
+  G('challenge-modal').style.display = 'none';
+};
+
+async function loadOpponentSquads() {
+  const wrap = G('opponent-squads-wrap');
+  if (!wrap) return;
+  wrap.innerHTML = '<div style="text-align:center;color:var(--ink3)">جاري التحميل...</div>';
+  try {
+    onSnapshot(collection(db,'squads'), snap => {
+      wrap.innerHTML = '';
+      if (snap.empty) {
+        wrap.innerHTML = '<div style="text-align:center;color:var(--ink3);padding:1rem;font-size:.85rem">لا توجد فرق أخرى</div>';
+        return;
+      }
+      snap.docs.forEach(d => {
+        if (d.id === squadId) return;
+        const sq = d.data();
+        wrap.innerHTML += `<div class="opp-card">
+          <div class="opp-nm">${sq.badge || '🛡️'} ${sq.name}</div>
+          <div class="opp-info">👥 ${sq.members?.length || 0}/5 · ⚡ ${fmt(sq.totalPts||0)}</div>
+          <button class="btn btn-p" style="margin:0;font-size:.85rem;padding:.7rem" onclick="sendChallenge('${d.id}')">تحدي</button>
+        </div>`;
+      });
+    });
+  } catch(e) {
+    console.error(e);
+    wrap.innerHTML = '<div style="text-align:center;color:var(--red);padding:1rem">خطأ في التحميل</div>';
+  }
+}
+
+window.sendChallenge = async (oppId) => {
+  const duration = parseInt(G('challenge-duration').value) || 24;
+  const sq    = (await getDoc(doc(db,'squads',squadId))).data();
+  const oppSq = (await getDoc(doc(db,'squads',oppId))).data();
+  const chalId = 'chal_' + Date.now() + '_' + Math.random().toString(36).substr(2,5);
+  const endsAt = new Date(Date.now() + duration*60*60*1000);
+  
+  const chalObj = {
+    id:chalId, team1Id:squadId, team1Name:sq.name, team1Badge:sq.badge, team1Pts:0,
+    team2Id:oppId, team2Name:oppSq.name, team2Badge:oppSq.badge, team2Pts:0,
+    status:'pending', durationHours:duration, createdAt:new Date().toISOString(), endsAt:endsAt.toISOString()
+  };
+  
+  await updateDoc(doc(db,'squads',squadId), { activeChallenges: arrayUnion(chalObj) });
+  await updateDoc(doc(db,'squads',oppId), { activeChallenges: arrayUnion(chalObj) });
+  closeChallengeModal();
+  toast('تم إرسال التحدي! 🎯','ok');
+};
+
+window.acceptChallenge = async (chalId) => {
+  const sqSnap = await getDoc(doc(db,'squads',squadId));
+  const sq = sqSnap.data();
+  const chalIdx = (sq.activeChallenges||[]).findIndex(c => c.id === chalId);
+  if (chalIdx === -1) return;
+  
+  const updated = [...sq.activeChallenges];
+  updated[chalIdx].status = 'active';
+  await updateDoc(doc(db,'squads',squadId), { activeChallenges: updated });
+  toast('🔥 تم قبول التحدي!','ok');
+};
+
+function saveStudyState() {
+  localStorage.setItem('mizan_study_sec',  studySec);
+  localStorage.setItem('mizan_study_time', Date.now());
+  localStorage.setItem('mizan_study_active','1');
+}
+function clearStudyState() {
+  localStorage.removeItem('mizan_study_sec');
+  localStorage.removeItem('mizan_study_time');
+  localStorage.removeItem('mizan_study_active');
+}
+function restoreStudyTimer() {
+  const saved    = localStorage.getItem('mizan_study_sec');
+  const savedTime= localStorage.getItem('mizan_study_time');
+  const wasActive= localStorage.getItem('mizan_study_active');
+  if (saved && savedTime && wasActive) {
+    const elapsed = Math.floor((Date.now() - parseInt(savedTime)) / 1000);
+    studySec = parseInt(saved) + elapsed;
+    lastStudyTime = Date.now() - studySec * 1000;
+    if (studySec >= 60) {
+      startStudy();
+    }
+  }
+}
+
+let sessionMode      = false;
+let sessionTarget    = 0;
+let sessionRemaining = 0;
+let sessionBreakTime = 0;
+let isOnBreak        = false;
+
+window.openSessionModal = () => {
+  G('session-modal').style.display = 'flex';
+};
+window.closeSessionModal = () => {
+  G('session-modal').style.display = 'none';
+};
+
+window.startSession = async () => {
+  const hours     = parseFloat(G('session-hours').value) || 1;
+  const breakMins = parseInt(G('session-break').value)   || 5;
+
+  if (hours < 0.5 || hours > 24) return toast('اختر ساعات بين 0.5 و 24','err');
+  if (breakMins < 1 || breakMins > 120) return toast('اختر استراحة بين 1 و 120 دقيقة','err');
+
+  sessionTarget    = hours * 3600;
+  sessionRemaining = sessionTarget;
+  sessionBreakTime = breakMins * 60;
+  sessionMode      = true;
+  isOnBreak        = false;
+  studySec         = 0;
+  threeHourWarned  = false;
+
+  closeSessionModal();
+  switchTab('study');
+
+  G('session-info').style.display = 'block';
+  updateSessionInfo();
+  toast(`جلسة ${hours} ساعة مع استراحات ${breakMins} دقيقة! 🎯`,'ok');
+};
+
+function updateSessionInfo() {
+  if (!sessionMode) return;
+  const remaining = Math.max(0, sessionTarget - studySec);
+  const percent   = Math.min(100, ((sessionTarget - remaining) / sessionTarget) * 100);
+  setText('session-target',      `الهدف: ${Math.floor(sessionTarget/3600)}س`);
+  setText('session-remaining',   `المتبقي: ${Math.floor(remaining/3600)}س ${Math.floor((remaining%3600)/60)}د`);
+  setText('session-progress-num',`${Math.round(percent)}%`);
+  G('session-progress-bar').style.width = `${percent}%`;
+  if (remaining <= 0 && !isOnBreak) completeSession();
+}
+
+function completeSession() {
+  sessionMode = false;
+  G('session-info').style.display = 'none';
+  stopStudy();
+  toast('أحسنت! اكملت الجلسة! 🎉','ok');
+}
+
+window.toggleStudy = () => { studyActive ? stopStudy() : startStudy(); };
+
+function startStudy() {
+  studyActive    = true;
+  lastStudyTime  = Date.now() - studySec * 1000;
+  threeHourWarned = false;
+  G('study-btn').classList.add('running');
+  setText('study-lbl', sessionMode ? '⏹ استراحة' : '⏹ إيقاف الجلسة');
+  G('timer-box').style.display = 'flex';
+  renderClock();
+  studyTick = setInterval(() => {
+    studySec = Math.floor((Date.now() - lastStudyTime) / 1000);
+    renderClock();
+    if (sessionMode) updateSessionInfo();
+
+    if (studySec >= 10800 && !threeHourWarned) {
+      threeHourWarned = true;
+      toast('⚠️ درست 3 ساعات! خذ استراحة 15 دقيقة للحفاظ على تركيزك 🧠','warn');
+    }
+
+    if (sessionMode && studySec > 0 && studySec % sessionBreakTime === 0 && !isOnBreak && (sessionTarget - studySec) > 0) {
+      isOnBreak = true;
+      pauseStudy();
+      toast(`⏰ استراحة! خذ ${Math.floor(sessionBreakTime/60)} دقائق 🌿`,'ok');
+      setTimeout(() => {
+        if (isOnBreak) {
+          isOnBreak = false;
+          toast('الاستراحة انتهت! ارجع للدراسة 💪','ok');
+        }
+      }, sessionBreakTime * 1000);
+    }
+
+    saveStudyState();
+  }, 1000);
+}
+
+function pauseStudy() {
+  if (!studyActive) return;
+  studyActive = false;
+  clearInterval(studyTick);
+  G('study-btn').classList.remove('running');
+  setText('study-lbl', sessionMode ? '▶ استكمل الدراسة' : '▶ ابدأ الدراسة');
+}
+
+function stopStudyQuiet() {
+  studyActive = false;
+  clearInterval(studyTick);
+  studySec = 0;
+  clearStudyState();
+}
+
+async function stopStudy() {
+  studyActive = false;
+  clearInterval(studyTick);
+  G('study-btn').classList.remove('running');
+  setText('study-lbl', '▶ ابدأ الدراسة');
+  G('timer-box').style.display = 'none';
+  clearStudyState();
+
+  if (studySec < 60) {
+    toast('الجلسة أقل من دقيقة — لم تُحتسب','warn');
+    studySec = 0; renderClock(); return;
+  }
+
+  const pts  = Math.floor(studySec/60);
+  const subj = G('subj-sel').value;
+  const sessionSecs = studySec;
+
+  await updateDoc(doc(db,'users',uid),    { totalPts:increment(pts), totalSec:increment(studySec) });
+  await updateDoc(doc(db,'squads',squadId),{ totalPts:increment(pts), totalSec:increment(studySec) });
+
+  const sqSnap = await getDoc(doc(db,'squads',squadId));
+  const sq = sqSnap.data();
+  if (sq.activeChallenges && sq.activeChallenges.length > 0) {
+    for (const chal of sq.activeChallenges) {
+      if (chal.status !== 'active') continue;
+      const isTeam1 = chal.team1Id === squadId;
+      const newPts = (isTeam1 ? chal.team1Pts : chal.team2Pts) + pts;
+      const chalIdx = sq.activeChallenges.findIndex(c => c.id === chal.id);
+      if (chalIdx !== -1) {
+        const updated = [...sq.activeChallenges];
+        if (isTeam1) updated[chalIdx].team1Pts = newPts;
+        else updated[chalIdx].team2Pts = newPts;
+        await updateDoc(doc(db,'squads',squadId), { activeChallenges: updated });
+      }
+    }
+  }
+
+  await setDoc(doc(collection(db,'sessions')),{
+    uid, squadId, subject:subj, seconds:studySec, pts, ts:serverTimestamp(), sessionMode, sessionTarget
+  });
+
+  flash('+'+pts+' ⚡');
+  const tip = getMizanTip(sessionSecs);
+  setTimeout(() => toast('💬 ' + tip, 'ok'), 1000);
+  toast('أحسنت! +'+pts+' نقطة ('+subj+')','ok');
+  studySec = 0; renderClock();
+}
+
+function renderClock() {
+  const h = String(Math.floor(studySec/3600)).padStart(2,'0');
+  const m = String(Math.floor(studySec%3600/60)).padStart(2,'0');
+  const s = String(studySec%60).padStart(2,'0');
+  setText('clock', h+':'+m+':'+s);
+}
+function flash(t){ const e=G('pts-flash'); e.textContent=t; e.classList.add('on'); setTimeout(()=>e.classList.remove('on'),2200); }
+
+window.copyCode = () => { navigator.clipboard.writeText(G('sq-code').textContent).then(()=>toast('تم النسخ 📋','ok')); };
+window.switchRankTab = tab => {
+  G('rpanel-squads').style.display = tab==='squads' ? 'block' : 'none';
+  G('rpanel-solo').style.display   = tab==='solo'   ? 'block' : 'none';
+  G('rtab-squads').classList.toggle('on', tab==='squads');
+  G('rtab-solo').classList.toggle('on',   tab==='solo');
+};
+window.switchTab = tab => {
+  ['team','study','rank','challenges'].forEach(t => {
+    const panel = G('panel-'+t);
+    const tabEl = G('tab-'+t);
+    if (panel) panel.style.display = t===tab ? 'block' : 'none';
+    if (tabEl)  tabEl.classList.toggle('on', t===tab);
+  });
+};
+window.toggleForm = w => {
+  const c=G('form-c'), j=G('form-j'), av=G('form-av');
+  if (w==='c') {
+    c.style.display  = c.style.display==='none'?'block':'none';
+    j.style.display  = 'none';
+    if(av) av.style.display = 'none';
+  } else if (w==='j') {
+    j.style.display  = j.style.display==='none'?'block':'none';
+    c.style.display  = 'none';
+    if(av) av.style.display = 'none';
+  } else {
+    if(av) {
+      av.style.display = av.style.display==='none'?'block':'none';
+      if (av.style.display==='block') loadAvailableSquads();
+    }
+    c.style.display = 'none';
+    j.style.display = 'none';
+  }
+};
+function goScreen(id) {
+  ['s-auth','s-register','s-lobby','s-squad'].forEach(s => {
+    const el = G(s); if(el) el.style.display='none';
+  });
+  const target = G(id); if(target) target.style.display='block';
+}
+</script>
+
+<style>
+:root{
+  --bg:    #06080f;
+  --c1:    #0f1624;
+  --c2:    #162035;
+  --c3:    #1e2d48;
+  --gold:  #f2b830;
+  --gd:    #d4950a;
+  --glow:  rgba(242,184,48,.16);
+  --teal:  #2dd4bf;
+  --blue:  #60a5fa;
+  --green: #4ade80;
+  --red:   #f87171;
+  --amber: #fbbf24;
+  --ink:   #e2e8f8;
+  --ink2:  #94a3b8;
+  --ink3:  #475569;
+  --br:    rgba(255,255,255,.055);
+  --r:     15px;
+}
+*{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+body{font-family:'Tajawal',sans-serif;background:var(--bg);color:var(--ink);min-height:100vh;direction:rtl;overflow-x:hidden}
+
+body::before{content:'';position:fixed;inset:0;pointer-events:none;z-index:0;
+  background:
+    radial-gradient(ellipse 80% 55% at 8% -5%,  rgba(242,184,48,.07) 0%,transparent 52%),
+    radial-gradient(ellipse 55% 45% at 92% 98%, rgba(45,212,191,.05) 0%,transparent 55%),
+    radial-gradient(ellipse 40% 30% at 50% 50%, rgba(96,165,250,.03) 0%,transparent 58%);}
+body::after{content:'';position:fixed;inset:0;pointer-events:none;z-index:0;
+  background-image:linear-gradient(var(--br) 1px,transparent 1px),linear-gradient(90deg,var(--br) 1px,transparent 1px);
+  background-size:56px 56px;}
+
+.topbar{position:sticky;top:0;z-index:300;display:flex;align-items:center;justify-content:space-between;
+  padding:.85rem 1.3rem;background:rgba(6,8,15,.84);backdrop-filter:blur(24px) saturate(180%);border-bottom:1px solid var(--br);}
+.brand{display:flex;align-items:center;gap:.65rem}
+.brand-logo{width:36px;height:36px;border-radius:10px;background:linear-gradient(135deg,var(--gold),var(--gd));
+  display:flex;align-items:center;justify-content:center;font-size:1.1rem;font-weight:900;color:#06080f;
+  box-shadow:0 0 18px var(--glow);flex-shrink:0;}
+.brand-name{font-size:1.07rem;font-weight:900;letter-spacing:-.3px;
+  background:linear-gradient(135deg,var(--gold) 40%,#fff);-webkit-background-clip:text;-webkit-text-fill-color:transparent;}
+.brand-tag{font-size:.63rem;color:var(--ink3);font-weight:500;margin-top:.1rem}
+.top-pill{font-size:.68rem;color:var(--ink3);background:var(--c1);border:1px solid var(--br);
+  padding:.25rem .75rem;border-radius:20px;font-family:'IBM Plex Mono',monospace;white-space:nowrap;max-width:180px;overflow:hidden;text-overflow:ellipsis;}
+.top-logout{background:none;border:none;color:var(--ink3);font-size:.72rem;cursor:pointer;
+  padding:.4rem .8rem;border-radius:6px;transition:all .2s;font-family:'Tajawal',sans-serif;font-weight:700;}
+.top-logout:hover{color:var(--red);background:rgba(248,113,113,.1)}
+
+.wrap{position:relative;z-index:1;max-width:460px;margin:0 auto;padding:1.4rem 1rem 6rem}
+
+#s-auth{min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center}
+.auth-container{width:100%;max-width:380px}
+.auth-hero{text-align:center;margin-bottom:2rem;animation:fadeUp .5s ease both}
+.auth-icon{font-size:3.2rem;display:block;margin-bottom:.8rem;animation:float 3.5s ease-in-out infinite}
+@keyframes float{0%,100%{transform:translateY(0)}50%{transform:translateY(-9px)}}
+.auth-title{font-size:1.8rem;font-weight:900;
+  background:linear-gradient(145deg,var(--gold) 25%,rgba(255,255,255,.9));
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;margin-bottom:.6rem;}
+.auth-sub{font-size:.85rem;color:var(--ink2);line-height:1.6}
+
+.auth-form{background:var(--c1);border:1px solid var(--br);border-radius:var(--r);
+  padding:1.8rem;margin-bottom:1rem;animation:fadeUp .45s ease both}
+.auth-form h3{font-size:.95rem;font-weight:800;color:var(--gold);margin-bottom:1.2rem;display:flex;align-items:center;gap:.6rem}
+.auth-form input{width:100%;background:var(--c2);border:1.5px solid var(--br);border-radius:10px;
+  color:var(--ink);font-family:'Tajawal',sans-serif;font-size:.92rem;padding:.82rem 1rem;
+  margin-bottom:.8rem;outline:none;transition:border-color .2s,box-shadow .2s;direction:rtl;}
+.auth-form input:focus{border-color:rgba(242,184,48,.45);box-shadow:0 0 0 3px rgba(242,184,48,.07)}
+.auth-form input::placeholder{color:var(--ink3)}
+
+.branch-row{display:grid;grid-template-columns:1fr 1fr;gap:.7rem;margin-bottom:1rem}
+.bb{background:var(--c2);border:2px solid var(--br);border-radius:12px;
+  padding:1.1rem .5rem;text-align:center;cursor:pointer;
+  transition:all .2s;color:var(--ink2);font-family:'Tajawal',sans-serif;font-size:.87rem;font-weight:700;}
+.bb .bi{font-size:1.7rem;display:block;margin-bottom:.35rem}
+.bb:hover{border-color:rgba(242,184,48,.3);background:var(--c3)}
+.bb.sel{border-color:var(--gold);background:rgba(242,184,48,.08);color:var(--gold);box-shadow:0 0 0 3px rgba(242,184,48,.1)}
+
+.auth-switch{text-align:center;font-size:.85rem;color:var(--ink2);margin-top:1.2rem}
+.auth-switch a{color:var(--gold);text-decoration:none;font-weight:700;cursor:pointer}
+.auth-switch a:hover{text-decoration:underline}
+
+.card{background:var(--c1);border:1px solid var(--br);border-radius:var(--r);padding:1.35rem;
+  margin-bottom:.9rem;box-shadow:0 6px 32px rgba(0,0,0,.35);position:relative;overflow:hidden;
+  animation:fadeUp .45s ease both;}
+.card::before{content:'';position:absolute;top:0;right:0;width:130px;height:130px;
+  background:radial-gradient(circle,rgba(242,184,48,.04) 0%,transparent 70%);pointer-events:none;}
+@keyframes fadeUp{from{opacity:0;transform:translateY(18px)}to{opacity:1;transform:translateY(0)}}
+.sec-ttl{font-size:.92rem;font-weight:800;color:var(--gold);margin-bottom:1rem;display:flex;align-items:center;gap:.5rem}
+
+.hero{text-align:center;padding:2rem 1rem 1.4rem;animation:fadeUp .5s ease both}
+.h-icon{font-size:3.8rem;display:block;margin-bottom:.75rem;animation:float 3.5s ease-in-out infinite}
+.h-title{font-size:2rem;font-weight:900;line-height:1.2;
+  background:linear-gradient(145deg,var(--gold) 25%,rgba(255,255,255,.9));
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;margin-bottom:.5rem;}
+.h-sub{font-size:.87rem;color:var(--ink2);line-height:1.75;max-width:310px;margin:0 auto}
+
+input,select{width:100%;background:var(--c2);border:1.5px solid var(--br);border-radius:10px;
+  color:var(--ink);font-family:'Tajawal',sans-serif;font-size:.92rem;padding:.82rem 1rem;
+  margin-bottom:.7rem;outline:none;transition:border-color .2s,box-shadow .2s;direction:rtl;appearance:none;}
+input:focus,select:focus{border-color:rgba(242,184,48,.45);box-shadow:0 0 0 3px rgba(242,184,48,.07)}
+input::placeholder{color:var(--ink3)}
+select option{background:var(--c2)}
+.field-label{font-size:.78rem;color:var(--ink2);font-weight:600;margin-bottom:.35rem;display:block}
+
+.code-wrap{position:relative;margin-bottom:.7rem}
+.code-wrap input{padding-right:5.8rem;font-family:'IBM Plex Mono',monospace;letter-spacing:.5px;direction:ltr;text-align:left;margin-bottom:0}
+.code-pre{position:absolute;right:1rem;top:50%;transform:translateY(-50%);
+  font-family:'IBM Plex Mono',monospace;font-size:.82rem;font-weight:600;color:var(--gold);pointer-events:none;letter-spacing:.5px}
+
+.btn{display:flex;align-items:center;justify-content:center;gap:.45rem;width:100%;
+  padding:.88rem 1.4rem;border-radius:11px;border:none;font-family:'Tajawal',sans-serif;
+  font-size:.97rem;font-weight:800;cursor:pointer;transition:all .18s;margin-bottom:.5rem;letter-spacing:.15px;}
+.btn:disabled{opacity:.6;cursor:not-allowed}
+.btn-p{background:linear-gradient(135deg,var(--gold),var(--gd));color:#06080f}
+.btn-p:hover:not(:disabled){transform:translateY(-2px);box-shadow:0 8px 24px rgba(242,184,48,.32)}
+.btn-p:active{transform:none}
+.btn-g{background:var(--c2);color:var(--ink2);border:1.5px solid var(--br);font-size:.88rem}
+.btn-g:hover{border-color:rgba(242,184,48,.3);color:var(--gold)}
+.btn-t{background:rgba(45,212,191,.09);color:var(--teal);border:1.5px solid rgba(45,212,191,.2)}
+.btn-t:hover{background:rgba(45,212,191,.16)}
+.btn-danger{background:rgba(248,113,113,.1);color:var(--red);border:1.5px solid rgba(248,113,113,.25);font-size:.85rem}
+.btn-danger:hover{background:rgba(248,113,113,.18)}
+.btn-study{background:linear-gradient(135deg,#22c55e,#16a34a);color:#fff;font-size:1.05rem;
+  padding:1.1rem;border-radius:13px;box-shadow:0 4px 16px rgba(34,197,94,.22)}
+.btn-study.running{background:linear-gradient(135deg,var(--red),#b91c1c);
+  box-shadow:0 4px 16px rgba(248,113,113,.22);animation:pr 1.6s infinite}
+@keyframes pr{0%,100%{box-shadow:0 0 0 0 rgba(248,113,113,.4)}50%{box-shadow:0 0 0 10px rgba(248,113,113,0)}}
+
+.sq-hero{background:linear-gradient(135deg,rgba(242,184,48,.08),rgba(45,212,191,.04));
+  border:1px solid rgba(242,184,48,.15);border-radius:var(--r);padding:1.5rem 1.3rem;
+  text-align:center;margin-bottom:.9rem;position:relative;overflow:hidden;animation:fadeUp .4s ease both}
+.sq-hero::after{content:'';position:absolute;bottom:-30px;left:50%;transform:translateX(-50%);
+  width:220px;height:60px;background:radial-gradient(ellipse,rgba(242,184,48,.07) 0%,transparent 70%)}
+.sq-big{font-size:1.75rem;font-weight:900;color:var(--gold);margin-bottom:.3rem;line-height:1.2}
+.sq-meta{font-size:.75rem;color:var(--ink3);display:flex;align-items:center;justify-content:center;gap:.5rem}
+.dot{width:3px;height:3px;border-radius:50%;background:var(--ink3)}
+.code-pill{display:inline-flex;align-items:center;gap:.65rem;background:var(--c2);
+  border:1.5px dashed rgba(242,184,48,.25);border-radius:9px;padding:.5rem 1rem;margin:.75rem 0 .1rem}
+.cp-lbl{font-size:.68rem;color:var(--ink3)}
+.cp-val{font-family:'IBM Plex Mono',monospace;font-size:.92rem;font-weight:600;color:var(--gold);letter-spacing:.6px}
+.cp-btn{background:none;border:1px solid var(--br);color:var(--ink3);padding:.22rem .6rem;
+  border-radius:6px;font-family:'Tajawal',sans-serif;font-size:.72rem;cursor:pointer;transition:all .18s}
+.cp-btn:hover{border-color:var(--gold);color:var(--gold)}
+
+.s4{display:grid;grid-template-columns:1fr 1fr;gap:.7rem;margin-bottom:.9rem}
+.sbox{background:var(--c1);border:1px solid var(--br);border-radius:13px;padding:1rem;text-align:center}
+.sv{font-size:1.65rem;font-weight:600;font-family:'IBM Plex Mono',monospace;color:var(--gold);line-height:1;margin-bottom:.3rem}
+.sl{font-size:.7rem;color:var(--ink3);font-weight:500}
+.sbox.tc .sv{color:var(--teal)} .sbox.bc .sv{color:var(--blue)} .sbox.gc .sv{color:var(--green)}
+
+.tabs{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:.3rem;background:var(--c1);
+  border:1px solid var(--br);border-radius:13px;padding:.3rem;margin-bottom:.9rem}
+.tab{padding:.58rem .3rem;border-radius:9px;text-align:center;font-size:.75rem;font-weight:700;
+  cursor:pointer;transition:all .18s;color:var(--ink3);border:none;background:none;font-family:'Tajawal',sans-serif}
+.tab.on{background:var(--c2);color:var(--gold);box-shadow:0 2px 10px rgba(0,0,0,.3)}
+
+/* ══ CHALLENGES ══ */
+.challenge-card{background:linear-gradient(135deg, rgba(15,22,36,.85), rgba(22,32,53,.85));
+  border:1.5px solid var(--br);border-radius:11px;padding:1.1rem;margin-bottom:.7rem;
+  animation:fadeUp .35s ease both;position:relative;overflow:hidden;}
+.challenge-card.winning{border-color:rgba(74,222,128,.35)}
+.challenge-card.losing{border-color:rgba(248,113,113,.35)}
+
+.chal-hd{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:.8rem;gap:.5rem;flex-wrap:wrap}
+.chal-teams{display:flex;align-items:center;gap:.4rem;flex:1;min-width:0;font-size:.8rem}
+.ct-badge{font-size:1.3rem;flex-shrink:0}
+.ct-name{font-weight:700;color:var(--ink);flex-shrink:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.ct-vs{font-weight:900;color:var(--ink3);font-size:.7rem;margin:0 .2rem}
+.chal-status{font-size:.7rem;font-weight:700;padding:.4rem .7rem;border-radius:16px;white-space:nowrap;flex-shrink:0;
+  background:rgba(251,191,36,.12);color:var(--amber);border:1px solid rgba(251,191,36,.25)}
+
+.chal-score{display:flex;justify-content:space-between;align-items:center;gap:.6rem;margin-bottom:.8rem;
+  background:var(--c3);border-radius:9px;padding:.8rem;border:1px solid rgba(255,255,255,.03)}
+.cs-unit{text-align:center}
+.cs-pts{font-size:1.4rem;font-weight:900;font-family:'IBM Plex Mono',monospace;color:var(--gold);line-height:1}
+.cs-lbl{font-size:.65rem;color:var(--ink3);margin-top:.15rem}
+.cs-diff{flex:1;text-align:center;font-size:.95rem;font-weight:800;
+  padding:.5rem;border-radius:8px;background:rgba(248,113,113,.1);color:var(--red);}
+.cs-diff.leading{background:rgba(74,222,128,.1);color:var(--green)}
+
+.chal-time{font-size:.8rem;color:var(--ink2);margin-bottom:.6rem;display:flex;align-items:center;gap:.3rem}
+
+.btn-action{background:linear-gradient(135deg,var(--green),#16a34a);color:#fff;font-size:.75rem;
+  padding:.5rem 1rem;border-radius:8px;border:none;cursor:pointer;font-family:'Tajawal',sans-serif;font-weight:700;
+  width:100%;transition:all .18s;}
+.btn-action:hover{transform:translateY(-2px);box-shadow:0 4px 12px rgba(74,222,128,.3)}
+
+.session-modal{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.65);
+  display:none;align-items:center;justify-content:center;z-index:999;backdrop-filter:blur(6px)}
+.session-content{background:var(--c1);border-radius:var(--r);padding:1.8rem;max-width:380px;
+  width:90%;animation:fadeUp .3s ease both}
+.session-hd{font-size:1.15rem;font-weight:900;color:var(--gold);margin-bottom:1.2rem;text-align:center;
+  display:flex;justify-content:space-between;align-items:center;}
+.session-field{margin-bottom:1.2rem}
+.session-field label{display:block;font-size:.8rem;font-weight:700;color:var(--ink2);margin-bottom:.5rem}
+.session-slider{width:100%;height:6px;border-radius:3px;background:var(--c2);outline:none;
+  -webkit-appearance:none;appearance:none;cursor:pointer;margin-bottom:0;padding:0;border:none;}
+.session-slider::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:20px;height:20px;
+  border-radius:50%;background:linear-gradient(135deg,var(--gold),var(--gd));cursor:pointer;box-shadow:0 0 10px rgba(242,184,48,.4)}
+.session-slider::-moz-range-thumb{width:20px;height:20px;border-radius:50%;background:linear-gradient(135deg,var(--gold),var(--gd));cursor:pointer;border:none;box-shadow:0 0 10px rgba(242,184,48,.4)}
+.session-value{text-align:center;font-size:1.2rem;font-weight:800;color:var(--gold);font-family:'IBM Plex Mono',monospace;margin-top:.6rem}
+
+#session-info{display:none;background:var(--c2);border:1px solid rgba(242,184,48,.15);border-radius:13px;
+  padding:1.2rem;margin-bottom:1rem;animation:fadeUp .3s ease both}
+.session-stat{display:flex;justify-content:space-between;align-items:center;margin-bottom:.8rem}
+.session-stat-label{font-size:.85rem;color:var(--ink2);font-weight:600}
+.session-stat-value{font-size:1.1rem;font-weight:800;color:var(--gold);font-family:'IBM Plex Mono',monospace}
+.session-progress{margin-top:1rem}
+.session-progress-label{font-size:.75rem;color:var(--ink3);margin-bottom:.5rem;display:flex;justify-content:space-between}
+.session-progress-bar{width:100%;height:8px;background:var(--c3);border-radius:4px;overflow:hidden}
+.session-progress-fill{height:100%;background:linear-gradient(90deg,var(--gd),var(--gold));border-radius:4px;width:0%;transition:width .3s ease}
+
+.challenge-modal{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.65);
+  display:none;align-items:center;justify-content:center;z-index:999;backdrop-filter:blur(6px)}
+.modal-content{background:var(--c1);border-radius:var(--r);padding:1.5rem;max-width:380px;
+  width:90%;max-height:70vh;overflow-y:auto}
+.modal-hd{font-size:1.1rem;font-weight:900;color:var(--gold);margin-bottom:1rem;display:flex;justify-content:space-between;align-items:center}
+.modal-close{background:none;border:none;color:var(--ink3);font-size:1.3rem;cursor:pointer}
+.opp-card{background:var(--c2);border:1px solid var(--br);border-radius:11px;
+  padding:.9rem;margin-bottom:.6rem;animation:fadeUp .3s ease both}
+.opp-nm{font-size:.88rem;font-weight:700;color:var(--ink);margin-bottom:.4rem}
+.opp-info{font-size:.75rem;color:var(--ink3);margin-bottom:.6rem}
+
+.mc{display:flex;align-items:center;gap:.8rem;background:var(--c2);border:1px solid var(--br);
+  border-radius:12px;padding:.9rem;margin-bottom:.55rem;transition:border-color .2s,transform .15s;animation:fadeUp .4s ease both}
+.mc:hover{transform:translateY(-1px)}
+.mc.is-me{border-color:rgba(242,184,48,.36);background:rgba(242,184,48,.04)}
+.mc-av{width:40px;height:40px;border-radius:50%;flex-shrink:0;
+  background:linear-gradient(135deg,var(--gold),var(--gd));color:#06080f;font-size:1.15rem;font-weight:900;
+  display:flex;align-items:center;justify-content:center}
+.mc-body{flex:1;min-width:0}
+.mc-name{font-size:.9rem;font-weight:700;display:flex;align-items:center;gap:.4rem;flex-wrap:wrap;}
+.me-chip{font-size:.62rem;background:rgba(242,184,48,.14);color:var(--gold);padding:.1rem .45rem;
+  border-radius:20px;border:1px solid rgba(242,184,48,.28);flex-shrink:0}
+.rank-chip{font-size:.6rem;background:rgba(96,165,250,.12);color:var(--blue);padding:.1rem .4rem;
+  border-radius:20px;border:1px solid rgba(96,165,250,.22);flex-shrink:0;white-space:nowrap;}
+.mc-sub{font-size:.7rem;color:var(--ink3);margin:.18rem 0 .45rem}
+.mc-bar{height:3px;background:var(--c3);border-radius:4px;overflow:hidden}
+.mc-fill{height:100%;background:linear-gradient(90deg,var(--gd),var(--gold));border-radius:4px;transition:width .7s ease}
+.mc-r{text-align:left;flex-shrink:0;display:flex;flex-direction:column;align-items:flex-end;gap:.3rem;}
+.mc-pts{font-size:.82rem;font-weight:700;color:var(--gold);font-family:'IBM Plex Mono',monospace}
+.mc-hrs{font-size:.7rem;color:var(--ink3)}
+.kick-btn{background:rgba(248,113,113,.1);border:1px solid rgba(248,113,113,.25);color:var(--red);
+  font-size:.65rem;padding:.2rem .5rem;border-radius:6px;cursor:pointer;font-family:'Tajawal',sans-serif;
+  font-weight:700;white-space:nowrap;transition:all .15s;}
+.kick-btn:hover{background:rgba(248,113,113,.22)}
+
+.lb-row{display:flex;align-items:center;gap:.7rem;background:var(--c2);border:1px solid var(--br);
+  border-radius:11px;padding:.85rem 1rem;margin-bottom:.5rem;transition:border-color .2s}
+.lb-row.mine{border-color:rgba(242,184,48,.4);background:rgba(242,184,48,.05)}
+.lb-pos{font-size:1.1rem;width:28px;text-align:center;flex-shrink:0}
+.lb-mid{flex:1;min-width:0}
+.lb-nm{font-size:.88rem;font-weight:700;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.lb-ct{font-size:.7rem;color:var(--ink3)}
+.lb-end{text-align:left;flex-shrink:0}
+.lb-p{display:block;font-size:.8rem;font-weight:700;color:var(--gold);font-family:'IBM Plex Mono',monospace}
+.lb-h{display:block;font-size:.7rem;color:var(--ink3);margin-top:.15rem}
+.lb-empty{text-align:center;color:var(--ink3);font-size:.85rem;padding:2rem}
+
+.avail-sq{background:var(--c2);border:1px solid rgba(45,212,191,.2);border-radius:11px;
+  padding:.9rem;margin-bottom:.6rem;animation:fadeUp .3s ease both}
+.as-hd{display:flex;align-items:center;gap:.5rem;margin-bottom:.5rem}
+.as-badge{font-size:1.3rem}
+.as-nm{font-size:.88rem;font-weight:700;color:var(--ink)}
+.as-info{display:flex;justify-content:space-between;font-size:.75rem;color:var(--ink3);margin-bottom:.6rem}
+
+#timer-box{display:none;align-items:center;justify-content:center;background:var(--c2);
+  border-radius:12px;padding:1.2rem;margin-bottom:.8rem;border:1px solid rgba(242,184,48,.1);position:relative;overflow:hidden}
+#timer-box::before{content:'';position:absolute;inset:0;
+  background:radial-gradient(ellipse at 50%,rgba(242,184,48,.05) 0%,transparent 65%)}
+#clock{font-family:'IBM Plex Mono',monospace;font-size:2.6rem;font-weight:600;color:var(--gold);
+  letter-spacing:5px;text-shadow:0 0 30px rgba(242,184,48,.4);position:relative;z-index:1}
+.pts-rule{font-size:.74rem;color:var(--ink3);text-align:center;margin-top:.5rem;
+  display:flex;align-items:center;justify-content:center;gap:.4rem}
+.pts-rule::before,.pts-rule::after{content:'';flex:1;height:1px;background:var(--br)}
+.tip-box{background:rgba(45,212,191,.05);border:1px solid rgba(45,212,191,.12);
+  border-radius:11px;padding:1rem;margin-top:.5rem}
+.tip-ttl{font-size:.8rem;font-weight:800;color:var(--teal);margin-bottom:.6rem}
+.tip-li{font-size:.78rem;color:var(--ink2);margin-bottom:.35rem;display:flex;gap:.4rem;align-items:flex-start;line-height:1.5}
+
+.lw{background:linear-gradient(135deg,rgba(242,184,48,.07),rgba(96,165,250,.04));
+  border:1px solid rgba(242,184,48,.12);border-radius:var(--r);padding:1.3rem;
+  text-align:center;margin-bottom:.9rem}
+.lw-n{font-size:1.3rem;font-weight:900;color:var(--gold);margin-bottom:.25rem}
+.lw-b{font-size:.8rem;color:var(--ink2)}
+.form-block{background:var(--c2);border:1px solid var(--br);border-radius:11px;padding:1.1rem;margin-top:.6rem;animation:fadeUp .3s ease both}
+.form-ttl{font-size:.85rem;font-weight:800;color:var(--ink2);margin-bottom:.75rem}
+
+#pts-flash{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%) scale(.4);
+  font-size:2.8rem;font-weight:900;color:var(--gold);pointer-events:none;opacity:0;z-index:999;
+  transition:all .35s cubic-bezier(.34,1.56,.64,1);font-family:'IBM Plex Mono',monospace;
+  text-shadow:0 0 40px rgba(242,184,48,.7)}
+#pts-flash.on{opacity:1;transform:translate(-50%,-65%) scale(1)}
+.toast{position:fixed;bottom:1.6rem;left:50%;transform:translateX(-50%) translateY(90px);
+  background:var(--c1);border:1px solid var(--br);color:var(--ink);padding:.7rem 1.5rem;
+  border-radius:40px;font-size:.88rem;font-weight:700;z-index:800;
+  max-width:85vw;text-align:center;white-space:normal;word-break:break-word;
+  box-shadow:0 8px 36px rgba(0,0,0,.55);transition:transform .3s cubic-bezier(.34,1.56,.64,1)}
+.toast.show{transform:translateX(-50%) translateY(0)}
+.toast.t-ok  {border-color:rgba(74,222,128,.35);color:var(--green)}
+.toast.t-err {border-color:rgba(248,113,113,.35);color:var(--red)}
+.toast.t-warn{border-color:rgba(251,191,36,.35) ;color:var(--amber)}
+
+.rank-tabs{display:grid;grid-template-columns:1fr 1fr;gap:.3rem;background:var(--c1);
+  border:1px solid var(--br);border-radius:13px;padding:.3rem;margin-bottom:.9rem}
+.rank-tab{padding:.55rem;border-radius:9px;text-align:center;font-size:.82rem;font-weight:700;
+  cursor:pointer;transition:all .18s;color:var(--ink3);border:none;background:none;font-family:'Tajawal',sans-serif}
+.rank-tab.on{background:var(--c2);color:var(--gold);box-shadow:0 2px 10px rgba(0,0,0,.3)}
+
+.empty-msg{text-align:center;color:var(--ink3);padding:1.2rem;font-size:.85rem}
+
+@media(max-width:380px){
+  .h-title{font-size:1.8rem} .sq-big{font-size:1.5rem}
+  #clock{font-size:2rem;letter-spacing:3px} .sv{font-size:1.4rem}
+  .auth-title{font-size:1.6rem}
+  .tabs{grid-template-columns:1fr 1fr 1fr 1fr}
+  .tab{font-size:.6rem}
+  .chal-teams{font-size:.7rem}
+}
+</style>
+
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <div class="brand-logo">م</div>
+    <div>
+      <div class="brand-name">ميزان</div>
+      <div class="brand-tag">منصة التعليم التفاعلي</div>
+    </div>
+  </div>
+  <div style="display:flex;align-items:center;gap:.5rem">
+    <div class="top-pill" id="top-user-info" style="display:none">مسجّل</div>
+    <button class="top-logout" id="logout-btn" onclick="doLogout()" style="display:none">خروج</button>
+    <div class="top-pill" id="top-pill-alt">Squads · السادس</div>
+  </div>
+</header>
+
+<div class="wrap">
+
+<!-- ══ AUTH ══ -->
+
+<div id="s-auth">
+  <div class="auth-container">
+    <div class="auth-hero">
+      <span class="auth-icon">🔐</span>
+      <div class="auth-title">ميزان Squads</div>
+      <p class="auth-sub">ادرس مع فريقك · تنافس مع الجميع</p>
+    </div>
+
+
+<div id="auth-login" class="auth-form">
+  <h3>🔓 تسجيل الدخول</h3>
+  <input id="login-email" type="email" placeholder="بريدك الإلكتروني" autocomplete="email"/>
+  <input id="login-pass" type="password" placeholder="كلمة السر" autocomplete="current-password"/>
+  <button id="login-btn" class="btn btn-p" onclick="doLogin()">🔓 دخول</button>
+  <div style="display:flex;align-items:center;gap:.5rem;margin:.9rem 0;color:var(--ink3);font-size:.73rem">
+    <div style="flex:1;height:1px;background:var(--br)"></div>أو<div style="flex:1;height:1px;background:var(--br)"></div>
+  </div>
+  <button id="google-btn" class="btn" onclick="doGoogleLogin()" style="background:rgba(59,130,246,.12);border:1.5px solid rgba(59,130,246,.3);color:var(--blue);margin-bottom:.5rem">🔵 دخول بجوجل</button>
+  <div class="auth-switch">ليس لديك حساب؟ <a onclick="switchAuth('signup')">تسجيل جديد →</a></div>
+</div>
+
+<div id="auth-signup" class="auth-form" style="display:none">
+  <h3>🚀 تسجيل جديد</h3>
+  <input id="signup-name" type="text" placeholder="اسمك الكامل" autocomplete="name" maxlength="30"/>
+  <input id="signup-email" type="email" placeholder="بريدك الإلكتروني" autocomplete="email"/>
+  <input id="signup-pass" type="password" placeholder="كلمة السر (6 أحرف على الأقل)" autocomplete="new-password"/>
+  <input id="signup-pass2" type="password" placeholder="تأكيد كلمة السر" autocomplete="new-password"/>
+  <span class="field-label">اختر فرعك الدراسي</span>
+  <div class="branch-row">
+    <div class="bb" id="bb-signup-sci" onclick="pickSignupBranch('علمي')"><span class="bi">🔬</span>الفرع العلمي</div>
+    <div class="bb" id="bb-signup-lit" onclick="pickSignupBranch('أدبي')"><span class="bi">📖</span>الفرع الأدبي</div>
+  </div>
+  <input type="hidden" id="signup-branch" value="علمي"/>
+  <button id="signup-btn" class="btn btn-p" onclick="doSignup()">🚀 تسجيل</button>
+  <div style="display:flex;align-items:center;gap:.5rem;margin:.9rem 0;color:var(--ink3);font-size:.73rem">
+    <div style="flex:1;height:1px;background:var(--br)"></div>أو<div style="flex:1;height:1px;background:var(--br)"></div>
+  </div>
+  <button id="signup-google-btn" class="btn" onclick="doGoogleSignup()" style="background:rgba(59,130,246,.12);border:1.5px solid rgba(59,130,246,.3);color:var(--blue);margin-bottom:.5rem">🔵 تسجيل بجوجل</button>
+  <div class="auth-switch">هل لديك حساب بالفعل؟ <a onclick="switchAuth('login')">← دخول</a></div>
+</div>
+
+
+  </div>
+</div>
+
+<!-- ══ REGISTER ══ -->
+
+<div id="s-register" style="display:none">
+  <div class="hero">
+    <span class="h-icon">🛡️</span>
+    <div class="h-title">إكمال الملف الشخصي</div>
+    <p class="h-sub">أخبرنا عن نفسك حتى نبدأ</p>
+  </div>
+  <div class="card">
+    <div class="sec-ttl">📝 بيانات إضافية</div>
+    <input id="r-name" type="text" placeholder="اسمك الكامل" autocomplete="off" maxlength="30"/>
+    <span class="field-label">اختر فرعك الدراسي</span>
+    <div class="branch-row">
+      <div class="bb" id="bb-sci" onclick="pickBranch('علمي')"><span class="bi">🔬</span>الفرع العلمي</div>
+      <div class="bb" id="bb-lit" onclick="pickBranch('أدبي')"><span class="bi">📖</span>الفرع الأدبي</div>
+    </div>
+    <input type="hidden" id="r-branch" value="علمي"/>
+    <button class="btn btn-p" onclick="doRegister()">✅ إكمال</button>
+  </div>
+</div>
+
+<!-- ══ LOBBY ══ -->
+
+<div id="s-lobby" style="display:none">
+  <div class="lw">
+    <div class="lw-n" id="lobby-hello">مرحباً 👋</div>
+    <div class="lw-b" id="lobby-branch"></div>
+  </div>
+  <div class="card">
+    <div class="sec-ttl">⚔️ انضم أو أنشئ فريقاً</div>
+    <button class="btn btn-p" onclick="toggleForm('c')">🛡️ أنشئ فريقاً جديداً</button>
+    <button class="btn btn-t" onclick="toggleForm('j')">🔗 انضم بكود دعوة</button>
+    <button class="btn btn-g" onclick="toggleForm('av')">🌐 تصفح الفرق المتاحة</button>
+
+
+<div id="form-c" class="form-block" style="display:none">
+  <div class="form-ttl">🛡️ إنشاء فريق جديد</div>
+  <input id="c-name" type="text" placeholder="اسم فريقك (مثل: ليوث ميزان)" maxlength="22" autocomplete="off"/>
+  <button class="btn btn-p" onclick="doCreate()">إنشاء الفريق</button>
+</div>
+
+<div id="form-j" class="form-block" style="display:none">
+  <div class="form-ttl">🔗 الانضمام بكود</div>
+  <div class="code-wrap">
+    <span class="code-pre">mizan</span>
+    <input id="j-code" type="text" placeholder="XXXX" maxlength="9" autocomplete="off"/>
+  </div>
+  <button class="btn btn-t" onclick="doJoin()">انضم للفريق</button>
+</div>
+
+<div id="form-av" class="form-block" style="display:none">
+  <div class="form-ttl">🌐 فرق متاحة للانضمام</div>
+  <div id="available-squads-wrap"></div>
+</div>
+
+
+  </div>
+</div>
+
+<!-- ══ SQUAD ══ -->
+
+<div id="s-squad" style="display:none">
+
+  <div class="sq-hero">
+    <div class="sq-big" id="sq-name">…</div>
+    <div class="sq-meta">
+      <span id="sq-count">—</span>
+      <span class="dot"></span><span>السادس الإعدادي</span>
+      <span class="dot"></span><span>ميزان</span>
+    </div>
+    <div class="code-pill">
+      <div><div class="cp-lbl">كود الدعوة</div><div class="cp-val" id="sq-code">—</div></div>
+      <button class="cp-btn" onclick="copyCode()">📋 نسخ</button>
+    </div>
+  </div>
+
+  <div class="s4">
+    <div class="sbox">      <div class="sv" id="sq-pts">0</div><div class="sl">⚡ نقاط الفريق</div></div>
+    <div class="sbox tc">   <div class="sv" id="sq-hrs">0</div><div class="sl">⏱ ساعات الفريق</div></div>
+    <div class="sbox bc">   <div class="sv" id="my-pts">0</div><div class="sl">⚡ نقاطي</div></div>
+    <div class="sbox gc">   <div class="sv" id="my-hrs">0</div><div class="sl">⏱ ساعاتي</div></div>
+  </div>
+
+  <div class="tabs">
+    <button class="tab on" id="tab-team"       onclick="switchTab('team')">👥 الفريق</button>
+    <button class="tab"    id="tab-study"      onclick="switchTab('study')">📚 دراسة</button>
+    <button class="tab"    id="tab-rank"       onclick="switchTab('rank')">🏆 تصنيف</button>
+    <button class="tab"    id="tab-challenges" onclick="switchTab('challenges')">⚔️ تحديات</button>
+  </div>
+
+  <!-- TAB: TEAM -->
+
+  <div id="panel-team">
+    <div id="members-wrap"></div>
+    <button id="leave-squad-btn" class="btn btn-danger" onclick="leaveSquad()" style="display:none;margin-top:.5rem">🚪 مغادرة الفريق</button>
+  </div>
+
+  <!-- TAB: STUDY -->
+
+  <div id="panel-study" style="display:none">
+    <div class="card">
+      <div class="sec-ttl">📚 جلسة الدراسة</div>
+      <button class="btn btn-p" onclick="openSessionModal()" style="margin-bottom:1rem">⏱ ابدأ جلسة مخطط لها</button>
+      <span class="field-label">المادة الحالية</span>
+      <select id="subj-sel"></select>
+
+
+  <div id="session-info">
+    <div class="session-stat">
+      <span class="session-stat-label">📊 الهدف</span>
+      <span class="session-stat-value" id="session-target">—</span>
+    </div>
+    <div class="session-stat">
+      <span class="session-stat-label">⏳ المتبقي</span>
+      <span class="session-stat-value" id="session-remaining">—</span>
+    </div>
+    <div class="session-progress">
+      <div class="session-progress-label">
+        <span>التقدم</span>
+        <span id="session-progress-num">0%</span>
+      </div>
+      <div class="session-progress-bar">
+        <div class="session-progress-fill" id="session-progress-bar"></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="timer-box"><div id="clock">00:00:00</div></div>
+  <button id="study-btn" class="btn btn-study" onclick="toggleStudy()">
+    <span id="study-lbl">▶ ابدأ الدراسة</span>
+  </button>
+  <div class="pts-rule">دقيقة واحدة = نقطة واحدة لك وللفريق</div>
+</div>
+<div class="tip-box">
+  <div class="tip-ttl">💡 نظام الجلسات</div>
+  <div class="tip-li"><span>📅</span><span>اختر عدد ساعات الدراسة والاستراحة</span></div>
+  <div class="tip-li"><span>⏱</span><span>تنبيهات تلقائية للاستراحة كل فترة</span></div>
+  <div class="tip-li"><span>⚡</span><span>كل دقيقة = نقطة فورية</span></div>
+  <div class="tip-li"><span>🎯</span><span>متابعة مباشرة لتقدمك نحو الهدف</span></div>
+</div>
+
+
+  </div>
+
+  <!-- TAB: RANK -->
+
+  <div id="panel-rank" style="display:none">
+    <div class="rank-tabs">
+      <button class="rank-tab on" id="rtab-squads" onclick="switchRankTab('squads')">🛡️ الفرق</button>
+      <button class="rank-tab"   id="rtab-solo"   onclick="switchRankTab('solo')">👤 الأفراد</button>
+    </div>
+    <div id="rpanel-squads">
+      <div id="lb-wrap"></div>
+    </div>
+    <div id="rpanel-solo" style="display:none">
+      <div id="lb-solo-wrap"></div>
+    </div>
+  </div>
+
+  <!-- TAB: CHALLENGES -->
+
+  <div id="panel-challenges" style="display:none">
+    <button class="btn btn-p" style="margin-bottom:1rem" onclick="openChallengeModal()">⚔️ إرسال تحدي جديد</button>
+    <div id="challenges-wrap"></div>
+  </div>
+
+</div>
+
+</div><!-- end .wrap -->
+
+<!-- MODAL: SESSION -->
+
+<div id="session-modal" class="session-modal">
+  <div class="session-content">
+    <div class="session-hd">
+      <span>⏱ إعداد الجلسة</span>
+      <button class="modal-close" onclick="closeSessionModal()">✕</button>
+    </div>
+    <div class="session-field">
+      <label>📚 مدة الدراسة (ساعات)</label>
+      <input type="range" id="session-hours" class="session-slider" min="0.5" max="10" step="0.5" value="2"
+        oninput="document.getElementById('session-hours-val').textContent=this.value+' ساعة'"/>
+      <div class="session-value" id="session-hours-val">2 ساعة</div>
+    </div>
+    <div class="session-field">
+      <label>☕ مدة الاستراحة (دقائق)</label>
+      <input type="range" id="session-break" class="session-slider" min="5" max="30" step="5" value="10"
+        oninput="document.getElementById('session-break-val').textContent=this.value+' دقيقة'"/>
+      <div class="session-value" id="session-break-val">10 دقيقة</div>
+    </div>
+    <button class="btn btn-p" onclick="startSession()">🚀 ابدأ الجلسة</button>
+  </div>
+</div>
+
+<!-- MODAL: CHALLENGES -->
+
+<div id="challenge-modal" class="challenge-modal">
+  <div class="modal-content">
+    <div class="modal-hd">
+      <span>⚔️ اختر فريقاً للتحدي</span>
+      <button class="modal-close" onclick="closeChallengeModal()">✕</button>
+    </div>
+    <div style="margin-bottom:1rem">
+      <label class="field-label">⏱ مدة التحدي (ساعات)</label>
+      <select id="challenge-duration" style="margin-bottom:0">
+        <option value="1">ساعة واحدة</option>
+        <option value="3">3 ساعات</option>
+        <option value="6">6 ساعات</option>
+        <option value="12">12 ساعة</option>
+        <option value="24" selected>يوم واحد (24 ساعة)</option>
+        <option value="48">يومين (48 ساعة)</option>
+        <option value="72">3 أيام (72 ساعة)</option>
+        <option value="168">أسبوع (7 أيام)</option>
+      </select>
+    </div>
+    <div id="opponent-squads-wrap"></div>
+  </div>
+</div>
+
+<div id="pts-flash"></div>
+<div id="toast" class="toast"></div>
+
+<script>
+window.pickBranch = function(b){
+  document.getElementById('r-branch').value = b;
+  document.getElementById('bb-sci').classList.toggle('sel', b==='علمي');
+  document.getElementById('bb-lit').classList.toggle('sel', b==='أدبي');
+};
+window.pickSignupBranch = function(b){
+  document.getElementById('signup-branch').value = b;
+  document.getElementById('bb-signup-sci').classList.toggle('sel', b==='علمي');
+  document.getElementById('bb-signup-lit').classList.toggle('sel', b==='أدبي');
+};
+pickBranch('علمي');
+pickSignupBranch('علمي');
+</script>
+
+</body>
+</html>
