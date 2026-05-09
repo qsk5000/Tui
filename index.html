@@ -12,8 +12,8 @@
 import { initializeApp }      from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
 import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, browserLocalPersistence, setPersistence }
                                from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
-import { getFirestore, doc, setDoc, getDoc, updateDoc, increment, deleteDoc,
-         onSnapshot, collection, query, orderBy, serverTimestamp, where, arrayRemove, arrayUnion }
+import { getFirestore, doc, setDoc, getDoc, getDocs, updateDoc, increment, deleteDoc,
+         onSnapshot, collection, query, orderBy, serverTimestamp, where, arrayRemove, arrayUnion, limit }
                                from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 
 const firebaseConfig = {
@@ -301,24 +301,25 @@ window.doJoin = async () => {
   toast('انضممت لـ '+ sq.name +' 🎯','ok');
 };
 
-window.loadAvailableSquads = () => {
-  onSnapshot(collection(db,'squads'), async snap => {
+window.loadAvailableSquads = async () => {
+  const el = G('available-squads-wrap');
+  if (!el) return;
+  el.innerHTML = '<div style="text-align:center;color:var(--ink3);padding:1rem;font-size:.82rem">جاري التحميل...</div>';
+  try {
+    const snap = await getDocs(collection(db,'squads'));
     const avail = [];
-    for (const d of snap.docs) {
+    snap.forEach(d => {
       const sq = d.data();
       if (sq.members && sq.members.length < 5 && !sq.members.includes(uid)) {
         avail.push({ id: d.id, ...sq });
       }
-    }
-    const el = G('available-squads-wrap');
-    if (!el) return;
+    });
     el.innerHTML = '';
     if (avail.length === 0) {
       el.innerHTML = '<div style="text-align:center;color:var(--ink3);padding:1rem;font-size:.85rem">لا توجد فرق متاحة حالياً 🏁</div>';
       return;
     }
     avail.forEach(sq => {
-      const spots = 5 - (sq.members?.length || 0);
       el.innerHTML += `<div class="avail-sq">
         <div class="as-hd">
           <span class="as-badge">${sq.badge || '🛡️'}</span>
@@ -331,7 +332,9 @@ window.loadAvailableSquads = () => {
         <button class="btn btn-t" style="margin:0;font-size:.85rem;padding:.7rem" onclick="quickJoin('${sq.id}')">انضم الآن</button>
       </div>`;
     });
-  });
+  } catch(e) {
+    el.innerHTML = '<div style="text-align:center;color:var(--red);padding:1rem">خطأ في التحميل</div>';
+  }
 };
 
 window.quickJoin = async (code) => {
@@ -398,7 +401,10 @@ window.kickMember = async (targetUid) => {
   }
 };
 
+let currentSquad = null;
+
 function bootSquad() {
+  const membersCache = {};
   onSnapshot(doc(db,'squads',squadId), async snap => {
     if (!snap.exists()) {
       await updateDoc(doc(db,'users',uid), { squadId: null }).catch(()=>{});
@@ -420,79 +426,18 @@ function bootSquad() {
     const leaveBtn = G('leave-squad-btn');
     if (leaveBtn) leaveBtn.style.display = 'block';
 
-    // تحديث التحديات
-    const chalWrap = G('challenges-wrap');
-    if (chalWrap) {
-      chalWrap.innerHTML = '';
-      const now = new Date();
-      let validChallenges = [];
-      if (sq.activeChallenges && sq.activeChallenges.length > 0) {
-        for (const chal of sq.activeChallenges) {
-          if (now <= new Date(chal.endsAt)) validChallenges.push(chal);
-        }
-        if (validChallenges.length < sq.activeChallenges.length) {
-          await updateDoc(doc(db,'squads',squadId), { activeChallenges: validChallenges }).catch(()=>{});
-        }
-      }
-      if (validChallenges.length === 0) {
-        chalWrap.innerHTML = '<div class="empty-msg">لا توجد تحديات حالياً 🏁</div>';
-      } else {
-        for (const chal of validChallenges) {
-          try {
-            const isTeam1 = chal.team1Id === squadId;
-            const myPts = isTeam1 ? chal.team1Pts : chal.team2Pts;
-            const oppPts = isTeam1 ? chal.team2Pts : chal.team1Pts;
-            const leadBy = Math.abs(myPts - oppPts);
-            const isWinning = myPts > oppPts;
-            
-            const status = chal.status || 'pending';
-            const statusBadge = status === 'pending' ? '⏳ في الانتظار' :
-                                status === 'active'  ? '🔥 جارٍ'        : '✅ اكتمل';
-            const endTime = new Date(chal.endsAt);
-            const remaining = Math.max(0, Math.floor((endTime - now) / 1000));
-            const rH = Math.floor(remaining/3600);
-            const rM = Math.floor((remaining%3600)/60);
-            const timeStr = rH > 0 ? `${rH}س ${rM}د` : `${rM}د`;
-            
-            chalWrap.innerHTML += `<div class="challenge-card ${isWinning ? 'winning' : 'losing'}">
-              <div class="chal-hd">
-                <div class="chal-teams">
-                  <span class="ct-badge">${isTeam1 ? chal.team1Badge : chal.team2Badge}</span>
-                  <span class="ct-name">${sq.name}</span>
-                  <span class="ct-vs">VS</span>
-                  <span class="ct-badge">${isTeam1 ? chal.team2Badge : chal.team1Badge}</span>
-                </div>
-                <span class="chal-status">${statusBadge}</span>
-              </div>
-              <div class="chal-score">
-                <div class="cs-unit">
-                  <div class="cs-pts">${myPts}</div>
-                  <div class="cs-lbl">نقاطك</div>
-                </div>
-                <div class="cs-diff ${isWinning ? 'leading' : 'trailing'}">
-                  ${isWinning ? '+' : '-'}${leadBy}
-                </div>
-                <div class="cs-unit">
-                  <div class="cs-pts">${oppPts}</div>
-                  <div class="cs-lbl">المنافس</div>
-                </div>
-              </div>
-              <div class="chal-time">⏱ ${timeStr}</div>
-              ${status === 'pending' && !isTeam1 ? `<button class="btn btn-action" onclick="acceptChallenge('${chal.id}')">✅ قبول</button>` : ''}
-            </div>`;
-          } catch(e) { console.error(e); }
-        }
-      }
-    }
-
-    // عرض الأعضاء
+    // عرض الأعضاء (مع cache لتقليل القراءات)
     const wrap = G('members-wrap');
     if (wrap) {
       wrap.innerHTML = '';
       for (const mid of sq.members) {
-        const us = await getDoc(doc(db,'users',mid));
-        if (!us.exists()) continue;
-        const u = us.data(), me = mid === uid;
+        if (!membersCache[mid]) {
+          const us = await getDoc(doc(db,'users',mid));
+          if (us.exists()) membersCache[mid] = us.data();
+        }
+        const u = membersCache[mid];
+        if (!u) continue;
+        const me = mid === uid;
         const pct = sq.totalPts ? Math.round((u.totalPts||0)/sq.totalPts*100) : 0;
         const rank = getStudentRank(u.totalPts||0);
         const d = document.createElement('div');
@@ -516,7 +461,7 @@ function bootSquad() {
     }
   });
 
-  // Leaderboard
+  // تصنيف الفرق - onSnapshot مقبول (عدد قليل)
   const lbQ = query(collection(db,'squads'), orderBy('totalPts','desc'));
   onSnapshot(lbQ, snap => {
     const el = G('lb-wrap');
@@ -534,31 +479,40 @@ function bootSquad() {
     if (snap.empty) el.innerHTML = '<div class="lb-empty">لا توجد فرق بعد 🏁</div>';
   });
 
-  // تصنيف الأفراد
-  const soloQ = query(collection(db,'users'), orderBy('totalPts','desc'));
-  onSnapshot(soloQ, snap => {
+  // تصنيف الأفراد - يُحمَّل مرة واحدة فقط عند الضغط على التاب
+  let soloLoaded = false;
+  window.loadSoloLeaderboard = async () => {
+    if (soloLoaded) return;
+    soloLoaded = true;
     const el = G('lb-solo-wrap');
     if (!el) return;
-    el.innerHTML = '';
-    const M = ['🥇','🥈','🥉'];
-    let rank = 0;
-    snap.docs.forEach((d,i) => {
-      const u = d.data();
-      if (!(u.totalPts > 0) && !(u.totalSec > 0)) return;
-      rank++;
-      const me = d.id === uid;
-      const r  = getStudentRank(u.totalPts||0);
-      el.innerHTML += `<div class="lb-row${me?' mine':''}">
-        <span class="lb-pos">${M[rank-1]||'#'+rank}</span>
-        <div class="lb-mid">
-          <span class="lb-nm">${u.name||'طالب'}</span>
-          <span class="lb-ct">${r.icon} ${r.title} · ${u.branch==='علمي'?'🔬 علمي':'📖 أدبي'}${u.squadId?'':' · <span style="color:var(--amber)">بدون فريق</span>'}</span>
-        </div>
-        <div class="lb-end"><span class="lb-p">⚡${fmt(u.totalPts||0)}</span><span class="lb-h">⏱${fmtH(u.totalSec||0)}</span></div>
-      </div>`;
-    });
-    if (rank === 0) el.innerHTML = '<div class="lb-empty">لا توجد بيانات بعد 🏁</div>';
-  });
+    el.innerHTML = '<div class="lb-empty">جاري التحميل...</div>';
+    try {
+      const soloQ = query(collection(db,'users'), orderBy('totalPts','desc'), limit(30));
+      const snap = await getDocs(soloQ);
+      el.innerHTML = '';
+      const M = ['🥇','🥈','🥉'];
+      let rank = 0;
+      snap.forEach((d,i) => {
+        const u = d.data();
+        if (!(u.totalPts > 0) && !(u.totalSec > 0)) return;
+        rank++;
+        const me = d.id === uid;
+        const r  = getStudentRank(u.totalPts||0);
+        el.innerHTML += `<div class="lb-row${me?' mine':''}">
+          <span class="lb-pos">${M[rank-1]||'#'+rank}</span>
+          <div class="lb-mid">
+            <span class="lb-nm">${u.name||'طالب'}</span>
+            <span class="lb-ct">${r.icon} ${r.title} · ${u.branch==='علمي'?'🔬 علمي':'📖 أدبي'}${u.squadId?'':' · <span style="color:var(--amber)">بدون فريق</span>'}</span>
+          </div>
+          <div class="lb-end"><span class="lb-p">⚡${fmt(u.totalPts||0)}</span><span class="lb-h">⏱${fmtH(u.totalSec||0)}</span></div>
+        </div>`;
+      });
+      if (rank === 0) el.innerHTML = '<div class="lb-empty">لا توجد بيانات بعد 🏁</div>';
+    } catch(e) {
+      el.innerHTML = '<div class="lb-empty">خطأ في التحميل</div>';
+    }
+  };
 
   // بيانات المستخدم الشخصية
   onSnapshot(doc(db,'users',uid), snap => {
@@ -594,22 +548,20 @@ async function loadOpponentSquads() {
   if (!wrap) return;
   wrap.innerHTML = '<div style="text-align:center;color:var(--ink3)">جاري التحميل...</div>';
   try {
-    onSnapshot(collection(db,'squads'), snap => {
-      wrap.innerHTML = '';
-      if (snap.empty) {
-        wrap.innerHTML = '<div style="text-align:center;color:var(--ink3);padding:1rem;font-size:.85rem">لا توجد فرق أخرى</div>';
-        return;
-      }
-      snap.docs.forEach(d => {
-        if (d.id === squadId) return;
-        const sq = d.data();
-        wrap.innerHTML += `<div class="opp-card">
-          <div class="opp-nm">${sq.badge || '🛡️'} ${sq.name}</div>
-          <div class="opp-info">👥 ${sq.members?.length || 0}/5 · ⚡ ${fmt(sq.totalPts||0)}</div>
-          <button class="btn btn-p" style="margin:0;font-size:.85rem;padding:.7rem" onclick="sendChallenge('${d.id}')">تحدي</button>
-        </div>`;
-      });
+    const snap = await getDocs(collection(db,'squads'));
+    wrap.innerHTML = '';
+    let count = 0;
+    snap.forEach(d => {
+      if (d.id === squadId) return;
+      const sq = d.data();
+      count++;
+      wrap.innerHTML += `<div class="opp-card">
+        <div class="opp-nm">${sq.badge || '🛡️'} ${sq.name}</div>
+        <div class="opp-info">👥 ${sq.members?.length || 0}/5 · ⚡ ${fmt(sq.totalPts||0)}</div>
+        <button class="btn btn-p" style="margin:0;font-size:.85rem;padding:.7rem" onclick="sendChallenge('${d.id}')">تحدي</button>
+      </div>`;
     });
+    if (count === 0) wrap.innerHTML = '<div style="text-align:center;color:var(--ink3);padding:1rem;font-size:.85rem">لا توجد فرق أخرى</div>';
   } catch(e) {
     console.error(e);
     wrap.innerHTML = '<div style="text-align:center;color:var(--red);padding:1rem">خطأ في التحميل</div>';
@@ -838,6 +790,7 @@ window.switchRankTab = tab => {
   G('rpanel-solo').style.display   = tab==='solo'   ? 'block' : 'none';
   G('rtab-squads').classList.toggle('on', tab==='squads');
   G('rtab-solo').classList.toggle('on',   tab==='solo');
+  if (tab === 'solo' && typeof loadSoloLeaderboard === 'function') loadSoloLeaderboard();
 };
 window.switchTab = tab => {
   ['team','study','rank','challenges'].forEach(t => {
@@ -846,6 +799,7 @@ window.switchTab = tab => {
     if (panel) panel.style.display = t===tab ? 'block' : 'none';
     if (tabEl)  tabEl.classList.toggle('on', t===tab);
   });
+  if (tab === 'challenges') renderGoals();
 };
 window.toggleForm = w => {
   const c=G('form-c'), j=G('form-j'), av=G('form-av');
@@ -866,6 +820,68 @@ window.toggleForm = w => {
     j.style.display = 'none';
   }
 };
+// ══ أهداف اليوم (localStorage فقط — صفر reads) ══
+function goalsKey() {
+  const today = new Date().toISOString().slice(0,10);
+  return 'mizan_goals_' + today;
+}
+function loadGoals() {
+  try { return JSON.parse(localStorage.getItem(goalsKey()) || '[]'); } catch { return []; }
+}
+function saveGoals(goals) {
+  localStorage.setItem(goalsKey(), JSON.stringify(goals));
+}
+function renderGoals() {
+  const goals = loadGoals();
+  const wrap  = G('goals-wrap');
+  const empty = G('goals-empty');
+  if (!wrap) return;
+  wrap.innerHTML = '';
+  if (goals.length === 0) {
+    if (empty) empty.style.display = 'block';
+    return;
+  }
+  if (empty) empty.style.display = 'none';
+  goals.forEach((g, i) => {
+    const div = document.createElement('div');
+    div.className = 'goal-item' + (g.done ? ' done' : '');
+    div.innerHTML = `
+      <div class="goal-check" onclick="toggleGoal(${i})">${g.done ? '✅' : '⬜'}</div>
+      <div class="goal-text">${g.text}</div>
+      <button class="goal-del" onclick="deleteGoal(${i})">✕</button>`;
+    wrap.appendChild(div);
+  });
+}
+window.addGoal = () => {
+  const inp = G('goal-input');
+  const text = inp.value.trim();
+  if (!text) return;
+  const goals = loadGoals();
+  goals.push({ text, done: false });
+  saveGoals(goals);
+  inp.value = '';
+  renderGoals();
+};
+window.toggleGoal = i => {
+  const goals = loadGoals();
+  if (goals[i]) goals[i].done = !goals[i].done;
+  saveGoals(goals);
+  renderGoals();
+};
+window.deleteGoal = i => {
+  const goals = loadGoals();
+  goals.splice(i, 1);
+  saveGoals(goals);
+  renderGoals();
+};
+// مسح أهداف أيام قديمة لتوفير مساحة
+(function cleanOldGoals() {
+  const today = new Date().toISOString().slice(0,10);
+  Object.keys(localStorage).forEach(k => {
+    if (k.startsWith('mizan_goals_') && !k.endsWith(today)) localStorage.removeItem(k);
+  });
+})();
+
 function goScreen(id) {
   ['s-auth','s-register','s-lobby','s-squad'].forEach(s => {
     const el = G(s); if(el) el.style.display='none';
@@ -1184,6 +1200,17 @@ select option{background:var(--c2)}
 
 .empty-msg{text-align:center;color:var(--ink3);padding:1.2rem;font-size:.85rem}
 
+.goal-item{display:flex;align-items:center;gap:.7rem;background:var(--c2);border:1px solid var(--br);
+  border-radius:10px;padding:.75rem .9rem;margin-bottom:.45rem;transition:all .2s;animation:fadeUp .3s ease both}
+.goal-item.done{opacity:.55;border-color:rgba(74,222,128,.2);background:rgba(74,222,128,.03)}
+.goal-item.done .goal-text{text-decoration:line-through;color:var(--ink3)}
+.goal-check{font-size:1.2rem;cursor:pointer;flex-shrink:0;transition:transform .15s}
+.goal-check:hover{transform:scale(1.2)}
+.goal-text{flex:1;font-size:.88rem;color:var(--ink);line-height:1.4;word-break:break-word}
+.goal-del{background:none;border:none;color:var(--ink3);font-size:.85rem;cursor:pointer;
+  padding:.2rem .4rem;border-radius:5px;flex-shrink:0;transition:all .15s;font-family:'Tajawal',sans-serif}
+.goal-del:hover{color:var(--red);background:rgba(248,113,113,.1)}
+
 @media(max-width:380px){
   .h-title{font-size:1.8rem} .sq-big{font-size:1.5rem}
   #clock{font-size:2rem;letter-spacing:3px} .sv{font-size:1.4rem}
@@ -1348,7 +1375,7 @@ select option{background:var(--c2)}
     <button class="tab on" id="tab-team"       onclick="switchTab('team')">👥 الفريق</button>
     <button class="tab"    id="tab-study"      onclick="switchTab('study')">📚 دراسة</button>
     <button class="tab"    id="tab-rank"       onclick="switchTab('rank')">🏆 تصنيف</button>
-    <button class="tab"    id="tab-challenges" onclick="switchTab('challenges')">⚔️ تحديات</button>
+    <button class="tab"    id="tab-challenges" onclick="switchTab('challenges')">🎯 أهداف اليوم</button>
   </div>
 
   <!-- TAB: TEAM -->
@@ -1420,11 +1447,24 @@ select option{background:var(--c2)}
     </div>
   </div>
 
-  <!-- TAB: CHALLENGES -->
+  <!-- TAB: DAILY GOALS -->
 
   <div id="panel-challenges" style="display:none">
-    <button class="btn btn-p" style="margin-bottom:1rem" onclick="openChallengeModal()">⚔️ إرسال تحدي جديد</button>
-    <div id="challenges-wrap"></div>
+    <div class="card" style="margin-bottom:.7rem">
+      <div class="sec-ttl">🎯 أهداف اليوم</div>
+      <div style="display:flex;gap:.5rem;margin-bottom:.7rem">
+        <input id="goal-input" type="text" placeholder="أضف هدفاً (مثال: مراجعة الكيمياء)" maxlength="60" autocomplete="off" style="margin:0;flex:1"/>
+        <button class="btn btn-p" onclick="addGoal()" style="margin:0;width:auto;padding:.82rem 1.1rem;flex-shrink:0">+</button>
+      </div>
+      <div id="goals-wrap"></div>
+      <div id="goals-empty" class="empty-msg" style="display:none">لا توجد أهداف اليوم — أضف هدفاً! 🎯</div>
+    </div>
+    <div class="tip-box">
+      <div class="tip-ttl">💡 كيف تستخدمها؟</div>
+      <div class="tip-li"><span>📝</span><span>اكتب أهداف دراستك اليوم</span></div>
+      <div class="tip-li"><span>✅</span><span>اضغط على الهدف لتحديده كمنجز</span></div>
+      <div class="tip-li"><span>🔄</span><span>الأهداف تُحفظ محلياً وتُصفَّر كل يوم تلقائياً</span></div>
+    </div>
   </div>
 
 </div>
@@ -1455,30 +1495,7 @@ select option{background:var(--c2)}
   </div>
 </div>
 
-<!-- MODAL: CHALLENGES -->
-
-<div id="challenge-modal" class="challenge-modal">
-  <div class="modal-content">
-    <div class="modal-hd">
-      <span>⚔️ اختر فريقاً للتحدي</span>
-      <button class="modal-close" onclick="closeChallengeModal()">✕</button>
-    </div>
-    <div style="margin-bottom:1rem">
-      <label class="field-label">⏱ مدة التحدي (ساعات)</label>
-      <select id="challenge-duration" style="margin-bottom:0">
-        <option value="1">ساعة واحدة</option>
-        <option value="3">3 ساعات</option>
-        <option value="6">6 ساعات</option>
-        <option value="12">12 ساعة</option>
-        <option value="24" selected>يوم واحد (24 ساعة)</option>
-        <option value="48">يومين (48 ساعة)</option>
-        <option value="72">3 أيام (72 ساعة)</option>
-        <option value="168">أسبوع (7 أيام)</option>
-      </select>
-    </div>
-    <div id="opponent-squads-wrap"></div>
-  </div>
-</div>
+<!-- DAILY GOALS LOGIC IS IN JS -->
 
 <div id="pts-flash"></div>
 <div id="toast" class="toast"></div>
