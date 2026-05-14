@@ -405,81 +405,126 @@ let currentSquad = null;
 
 function bootSquad() {
   const membersCache = {};
-  onSnapshot(doc(db,'squads',squadId), async snap => {
-    if (!snap.exists()) {
-      await updateDoc(doc(db,'users',uid), { squadId: null }).catch(()=>{});
-      squadId = null;
-      goScreen('s-lobby');
-      const uSnap = await getDoc(doc(db,'users',uid));
-      if (uSnap.exists()) prefillLobby(uSnap.data());
-      return;
-    }
-    const sq = snap.data();
-    const isOwner = sq.ownerId === uid;
+  let squadCache = null;
+  let lbInterval = null;
+  let userInterval = null;
 
-    setText('sq-name',  sq.badge+' '+sq.name);
-    setText('sq-code',  sq.code||squadId);
-    setText('sq-count', sq.members.length+'/5 أعضاء');
-    setText('sq-pts',   fmt(sq.totalPts||0));
-    setText('sq-hrs',   fmtH(sq.totalSec||0));
-
-    const leaveBtn = G('leave-squad-btn');
-    if (leaveBtn) leaveBtn.style.display = 'block';
-
-    // عرض الأعضاء (مع cache لتقليل القراءات)
-    const wrap = G('members-wrap');
-    if (wrap) {
-      wrap.innerHTML = '';
-      for (const mid of sq.members) {
-        if (!membersCache[mid]) {
-          const us = await getDoc(doc(db,'users',mid));
-          if (us.exists()) membersCache[mid] = us.data();
-        }
-        const u = membersCache[mid];
-        if (!u) continue;
-        const me = mid === uid;
-        const pct = sq.totalPts ? Math.round((u.totalPts||0)/sq.totalPts*100) : 0;
-        const rank = getStudentRank(u.totalPts||0);
-        const d = document.createElement('div');
-        d.className = 'mc'+(me?' is-me':'');
-        d.innerHTML = `
-          <div class="mc-av">${u.name[0]}</div>
-          <div class="mc-body">
-            <div class="mc-name">${u.name}${me?'<span class="me-chip">أنت</span>':''}
-              <span class="rank-chip">${rank.icon} ${rank.title}</span>
-            </div>
-            <div class="mc-sub">${u.branch==='علمي'?'🔬 علمي':'📖 أدبي'} · السادس الإعدادي</div>
-            <div class="mc-bar"><div class="mc-fill" style="width:${pct}%"></div></div>
-          </div>
-          <div class="mc-r">
-            <div class="mc-pts">⚡${fmt(u.totalPts||0)}</div>
-            <div class="mc-hrs">${fmtH(u.totalSec||0)}</div>
-            ${isOwner && !me ? `<button class="kick-btn" onclick="kickMember('${mid}')">❌ طرد</button>` : ''}
-          </div>`;
-        wrap.appendChild(d);
+  // ── جلب بيانات الفريق كل 30 ثانية بدل onSnapshot ──
+  async function fetchSquad() {
+    try {
+      const snap = await getDoc(doc(db,'squads',squadId));
+      if (!snap.exists()) {
+        await updateDoc(doc(db,'users',uid), { squadId: null }).catch(()=>{});
+        squadId = null;
+        clearInterval(lbInterval);
+        clearInterval(userInterval);
+        goScreen('s-lobby');
+        const uSnap = await getDoc(doc(db,'users',uid));
+        if (uSnap.exists()) prefillLobby(uSnap.data());
+        return;
       }
-    }
-  });
+      const sq = snap.data();
+      squadCache = sq;
+      const isOwner = sq.ownerId === uid;
 
-  // تصنيف الفرق - onSnapshot مقبول (عدد قليل)
-  const lbQ = query(collection(db,'squads'), orderBy('totalPts','desc'));
-  onSnapshot(lbQ, snap => {
-    const el = G('lb-wrap');
-    if (!el) return;
-    el.innerHTML = '';
-    const M = ['🥇','🥈','🥉'];
-    snap.docs.forEach((d,i) => {
-      const sq = d.data(), mine = d.id === squadId;
-      el.innerHTML += `<div class="lb-row${mine?' mine':''}">
-        <span class="lb-pos">${M[i]||'#'+(i+1)}</span>
-        <div class="lb-mid"><span class="lb-nm">${sq.badge} ${sq.name}</span><span class="lb-ct">${(sq.members||[]).length} أعضاء</span></div>
-        <div class="lb-end"><span class="lb-p">⚡${fmt(sq.totalPts||0)}</span><span class="lb-h">⏱${fmtH(sq.totalSec||0)}</span></div>
-      </div>`;
-    });
-    if (snap.empty) el.innerHTML = '<div class="lb-empty">لا توجد فرق بعد 🏁</div>';
-  });
+      setText('sq-name',  sq.badge+' '+sq.name);
+      setText('sq-code',  sq.code||squadId);
+      setText('sq-count', sq.members.length+'/5 أعضاء');
+      setText('sq-pts',   fmt(sq.totalPts||0));
+      setText('sq-hrs',   fmtH(sq.totalSec||0));
 
-  // تصنيف الأفراد - يُحمَّل مرة واحدة فقط عند الضغط على التاب
+      const leaveBtn = G('leave-squad-btn');
+      if (leaveBtn) leaveBtn.style.display = 'block';
+
+      const wrap = G('members-wrap');
+      if (wrap) {
+        wrap.innerHTML = '';
+        for (const mid of sq.members) {
+          if (!membersCache[mid]) {
+            const us = await getDoc(doc(db,'users',mid));
+            if (us.exists()) membersCache[mid] = us.data();
+          }
+          const u = membersCache[mid];
+          if (!u) continue;
+          const me = mid === uid;
+          const pct = sq.totalPts ? Math.round((u.totalPts||0)/sq.totalPts*100) : 0;
+          const rank = getStudentRank(u.totalPts||0);
+          const d = document.createElement('div');
+          d.className = 'mc'+(me?' is-me':'');
+          d.innerHTML = `
+            <div class="mc-av">${u.name[0]}</div>
+            <div class="mc-body">
+              <div class="mc-name">${u.name}${me?'<span class="me-chip">أنت</span>':''}
+                <span class="rank-chip">${rank.icon} ${rank.title}</span>
+              </div>
+              <div class="mc-sub">${u.branch==='علمي'?'🔬 علمي':'📖 أدبي'} · السادس الإعدادي</div>
+              <div class="mc-bar"><div class="mc-fill" style="width:${pct}%"></div></div>
+            </div>
+            <div class="mc-r">
+              <div class="mc-pts">⚡${fmt(u.totalPts||0)}</div>
+              <div class="mc-hrs">${fmtH(u.totalSec||0)}</div>
+              ${isOwner && !me ? `<button class="kick-btn" onclick="kickMember('${mid}')">❌ طرد</button>` : ''}
+            </div>`;
+          wrap.appendChild(d);
+        }
+      }
+    } catch(e) { console.warn('fetchSquad error', e); }
+  }
+
+  // ── تصنيف الفرق كل 60 ثانية بدل onSnapshot ──
+  async function fetchLeaderboard() {
+    try {
+      const el = G('lb-wrap');
+      if (!el) return;
+      const lbQ = query(collection(db,'squads'), orderBy('totalPts','desc'), limit(20));
+      const snap = await getDocs(lbQ);
+      el.innerHTML = '';
+      const M = ['🥇','🥈','🥉'];
+      snap.docs.forEach((d,i) => {
+        const sq = d.data(), mine = d.id === squadId;
+        el.innerHTML += `<div class="lb-row${mine?' mine':''}">
+          <span class="lb-pos">${M[i]||'#'+(i+1)}</span>
+          <div class="lb-mid"><span class="lb-nm">${sq.badge} ${sq.name}</span><span class="lb-ct">${(sq.members||[]).length} أعضاء</span></div>
+          <div class="lb-end"><span class="lb-p">⚡${fmt(sq.totalPts||0)}</span><span class="lb-h">⏱${fmtH(sq.totalSec||0)}</span></div>
+        </div>`;
+      });
+      if (snap.empty) el.innerHTML = '<div class="lb-empty">لا توجد فرق بعد 🏁</div>';
+    } catch(e) { console.warn('fetchLeaderboard error', e); }
+  }
+
+  // ── بيانات المستخدم كل 60 ثانية بدل onSnapshot ──
+  async function fetchUser() {
+    try {
+      const snap = await getDoc(doc(db,'users',uid));
+      if (!snap.exists()) return;
+      const u = snap.data();
+      // نحدث cache الأعضاء لنفسي
+      membersCache[uid] = u;
+      setText('my-pts', fmt(u.totalPts||0));
+      setText('my-hrs', fmtH(u.totalSec||0));
+      const rank = getStudentRank(u.totalPts||0);
+      const userInfo = G('top-user-info');
+      if (userInfo) userInfo.textContent = `${rank.icon} ${u.name} — ${rank.title}`;
+      const sel = G('subj-sel');
+      if (sel && sel.children.length === 0) {
+        (SUBJECTS[u.branch]||SUBJECTS['علمي']).forEach(s => {
+          const o = document.createElement('option'); o.value = s; o.textContent = s; sel.appendChild(o);
+        });
+        syncYtSubjects();
+      }
+    } catch(e) { console.warn('fetchUser error', e); }
+  }
+
+  // تحميل أولي فوري
+  fetchSquad();
+  fetchUser();
+  fetchLeaderboard();
+
+  // تحديث دوري — فريق كل 30ث، باقي كل 60ث
+  lbInterval   = setInterval(fetchLeaderboard, 60000);
+  userInterval = setInterval(() => { fetchUser(); fetchSquad(); }, 30000);
+
+  // تصنيف الأفراد — مرة واحدة فقط عند الضغط
   let soloLoaded = false;
   window.loadSoloLeaderboard = async () => {
     if (soloLoaded) return;
@@ -513,26 +558,6 @@ function bootSquad() {
       el.innerHTML = '<div class="lb-empty">خطأ في التحميل</div>';
     }
   };
-
-  // بيانات المستخدم الشخصية
-  onSnapshot(doc(db,'users',uid), snap => {
-    if (!snap.exists()) return;
-    const u = snap.data();
-    setText('my-pts', fmt(u.totalPts||0));
-    setText('my-hrs', fmtH(u.totalSec||0));
-
-    const rank = getStudentRank(u.totalPts||0);
-    const userInfo = G('top-user-info');
-    if (userInfo) userInfo.textContent = `${rank.icon} ${u.name} — ${rank.title}`;
-
-    const sel = G('subj-sel');
-    if (sel) {
-      sel.innerHTML = '';
-      (SUBJECTS[u.branch]||SUBJECTS['علمي']).forEach(s => {
-        const o = document.createElement('option'); o.value = s; o.textContent = s; sel.appendChild(o);
-      });
-    }
-  });
 }
 
 window.openChallengeModal = async () => {
@@ -673,6 +698,35 @@ let sessionRemaining = 0;
 let sessionBreakTime = 0;
 let isOnBreak        = false;
 
+// ══ نظام الإشعارات ══
+async function requestNotifPermission() {
+  if (!('Notification' in window)) return false;
+  if (Notification.permission === 'granted') return true;
+  if (Notification.permission === 'denied') return false;
+  const result = await Notification.requestPermission();
+  return result === 'granted';
+}
+
+function sendNotif(title, body, icon = '📚') {
+  if (!('Notification' in window) || Notification.permission !== 'granted') return;
+  try {
+    const n = new Notification(title, {
+      body,
+      icon: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y=".9em" font-size="90">' + icon + '</text></svg>',
+      badge: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y=".9em" font-size="90">⚡</text></svg>',
+      dir: 'rtl',
+      lang: 'ar',
+      vibrate: [200, 100, 200],
+      requireInteraction: false,
+      tag: 'mizan-study'
+    });
+    // نغلق الإشعار بعد 6 ثوان تلقائياً
+    setTimeout(() => n.close(), 6000);
+    // لما يضغط على الإشعار يرجع للصفحة
+    n.onclick = () => { window.focus(); n.close(); };
+  } catch(e) { console.warn('Notification error:', e); }
+}
+
 window.openSessionModal = () => {
   G('session-modal').style.display = 'flex';
 };
@@ -701,6 +755,11 @@ window.startSession = async () => {
   G('session-info').style.display = 'block';
   updateSessionInfo();
   toast(`جلسة ${hours} ساعة مع استراحات ${breakMins} دقيقة! 🎯`,'ok');
+
+  // نطلب إذن الإشعارات عند بدء الجلسة
+  requestNotifPermission().then(granted => {
+    if (!granted) toast('💡 فعّل الإشعارات لتلقى تنبيهاً عند اكتمال الجلسة','warn');
+  });
 };
 
 function updateSessionInfo() {
@@ -719,9 +778,25 @@ function completeSession() {
   G('session-info').style.display = 'none';
   stopStudy();
   toast('أحسنت! اكملت الجلسة! 🎉','ok');
+  // إشعار اكتمال الجلسة
+  sendNotif(
+    '🎉 أحسنت! اكتملت الجلسة!',
+    `انتهيت من جلسة الدراسة — استحقيت راحة يا بطل! ⭐`,
+    '🎉'
+  );
 }
 
 window.toggleStudy = () => { studyActive ? stopStudy() : startStudy(); };
+
+window.togglePause = () => {
+  if (!studyActive) {
+    // استئناف
+    startStudy();
+  } else {
+    // إيقاف مؤقت
+    pauseStudy();
+  }
+};
 
 function startStudy() {
   studyActive     = true;
@@ -732,6 +807,9 @@ function startStudy() {
   G('study-btn').classList.add('running');
   setText('study-lbl', sessionMode ? '⏹ استراحة' : '⏹ إيقاف الجلسة');
   G('timer-box').style.display = 'flex';
+  // أظهر زر الإيقاف المؤقت
+  const pb = G('pause-btn');
+  if (pb) { pb.style.display = 'flex'; setText('pause-lbl', '⏸ إيقاف مؤقت'); pb.classList.remove('paused'); }
   renderClock();
   studyTick = setInterval(() => {
     // الثواني = ما كان محفوظاً + ما مضى منذ آخر start
@@ -743,16 +821,19 @@ function startStudy() {
     if (studySec >= 10800 && !threeHourWarned) {
       threeHourWarned = true;
       toast('⚠️ درست 3 ساعات! خذ استراحة 15 دقيقة للحفاظ على تركيزك 🧠','warn');
+      sendNotif('🧠 درست 3 ساعات متواصلة!', 'خذ استراحة 15 دقيقة للحفاظ على تركيزك — أنت بطل!', '⚠️');
     }
 
     if (sessionMode && studySec > 0 && studySec % sessionBreakTime === 0 && !isOnBreak && (sessionTarget - studySec) > 0) {
       isOnBreak = true;
       pauseStudy();
       toast(`⏰ استراحة! خذ ${Math.floor(sessionBreakTime/60)} دقائق 🌿`,'ok');
+      sendNotif('☕ وقت الاستراحة!', `خذ ${Math.floor(sessionBreakTime/60)} دقائق راحة — تستاهل! 🌿`, '☕');
       setTimeout(() => {
         if (isOnBreak) {
           isOnBreak = false;
           toast('الاستراحة انتهت! ارجع للدراسة 💪','ok');
+          sendNotif('💪 انتهت الاستراحة!', 'ارجع للدراسة — أنت قادر على الإنجاز! 🔥', '📚');
         }
       }, sessionBreakTime * 1000);
     }
@@ -766,7 +847,10 @@ function pauseStudy() {
   studyActive = false;
   clearInterval(studyTick);
   G('study-btn').classList.remove('running');
-  setText('study-lbl', sessionMode ? '▶ استكمل الدراسة' : '▶ ابدأ الدراسة');
+  setText('study-lbl', sessionMode ? '▶ استكمل الدراسة' : '⏹ إيقاف الجلسة');
+  // غيّر زر الإيقاف المؤقت لـ استئناف
+  const pb = G('pause-btn');
+  if (pb) { pb.classList.add('paused'); setText('pause-lbl', '▶ استئناف'); }
 }
 
 function stopStudyQuiet() {
@@ -782,6 +866,9 @@ async function stopStudy() {
   G('study-btn').classList.remove('running');
   setText('study-lbl', '▶ ابدأ الدراسة');
   G('timer-box').style.display = 'none';
+  // أخفِ زر الإيقاف المؤقت
+  const pb = G('pause-btn');
+  if (pb) { pb.style.display = 'none'; pb.classList.remove('paused'); }
   clearStudyState();
 
   if (studySec < 60) {
@@ -853,6 +940,7 @@ function renderClock() {
   const m = String(Math.floor(studySec%3600/60)).padStart(2,'0');
   const s = String(studySec%60).padStart(2,'0');
   setText('clock', h+':'+m+':'+s);
+  renderYtClock();
 }
 function flash(t){ const e=G('pts-flash'); e.textContent=t; e.classList.add('on'); setTimeout(()=>e.classList.remove('on'),2200); }
 
@@ -865,13 +953,15 @@ window.switchRankTab = tab => {
   if (tab === 'solo' && typeof loadSoloLeaderboard === 'function') loadSoloLeaderboard();
 };
 window.switchTab = tab => {
-  ['team','study','rank','challenges'].forEach(t => {
+  ['team','study','rank','challenges','mystats','ai'].forEach(t => {
     const panel = G('panel-'+t);
     const tabEl = G('tab-'+t);
     if (panel) panel.style.display = t===tab ? 'block' : 'none';
     if (tabEl)  tabEl.classList.toggle('on', t===tab);
   });
   if (tab === 'challenges') renderGoals();
+  if (tab === 'mystats') loadMyStats();
+  if (tab === 'ai') initAiTab();
 };
 window.toggleForm = w => {
   const c=G('form-c'), j=G('form-j'), av=G('form-av');
@@ -1145,6 +1235,182 @@ document.addEventListener('visibilitychange', () => {
   }
 });
 
+// ══ إحصائيات الطالب اليومية ══
+let myStatsLoaded = false;
+let myStatsCache  = null;
+let myStatsCacheTime = 0;
+
+async function loadMyStats() {
+  // كاش 5 دقائق — ما نجلب من Firebase إذا البيانات جديدة
+  const now = Date.now();
+  if (myStatsCache && (now - myStatsCacheTime) < 300000) {
+    renderMyStats(myStatsCache);
+    return;
+  }
+  myStatsLoaded = false;
+  G('mystats-loading').style.display = 'block';
+  G('mystats-content').style.display = 'none';
+  G('mystats-empty').style.display   = 'none';
+
+  try {
+    // آخر 7 أيام
+    const sevenDaysAgo = new Date();
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6);
+    sevenDaysAgo.setHours(0, 0, 0, 0);
+
+    const q = query(
+      collection(db, 'sessions'),
+      where('uid', '==', uid),
+      orderBy('ts', 'desc'),
+      limit(50)
+    );
+    const snap = await getDocs(q);
+
+    if (snap.empty) {
+      G('mystats-loading').style.display = 'none';
+      G('mystats-empty').style.display   = 'block';
+      return;
+    }
+
+    // نحفظ النتيجة في cache
+    myStatsCache = snap;
+    myStatsCacheTime = Date.now();
+    renderMyStats(snap);
+
+  } catch(e) {
+    console.error(e);
+    G('mystats-loading').style.display = 'none';
+    G('mystats-empty').style.display   = 'block';
+    G('mystats-empty').textContent = 'حدث خطأ في التحميل — تأكد من الاتصال بالنت';
+  }
+}
+
+function renderMyStats(snap) {
+  const sevenDaysAgo = new Date();
+  sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6);
+  sevenDaysAgo.setHours(0, 0, 0, 0);
+
+  G('mystats-loading').style.display = 'none';
+
+  const dayMap = {};
+  const subjMap = {};
+
+  snap.forEach(d => {
+    const s = d.data();
+    if (!s.ts) return;
+    const date = s.ts.toDate ? s.ts.toDate() : new Date(s.ts);
+    if (date < sevenDaysAgo) return;
+    const key = date.toISOString().slice(0, 10);
+    if (!dayMap[key]) dayMap[key] = { secs: 0, subjects: {} };
+    dayMap[key].secs += (s.seconds || 0);
+    const subj = s.subject || 'أخرى';
+    dayMap[key].subjects[subj] = (dayMap[key].subjects[subj] || 0) + (s.seconds || 0);
+    subjMap[subj] = (subjMap[subj] || 0) + (s.seconds || 0);
+  });
+
+  const days = [];
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date();
+    d.setDate(d.getDate() - i);
+    const key = d.toISOString().slice(0, 10);
+    const dayNames = ['أحد','إثن','ثلا','أرب','خمي','جمع','سبت'];
+    days.push({
+      key,
+      label: i === 0 ? 'اليوم' : i === 1 ? 'أمس' : dayNames[d.getDay()],
+      secs: dayMap[key]?.secs || 0
+    });
+  }
+
+  const totalSecs = days.reduce((a, d) => a + d.secs, 0);
+  if (totalSecs === 0) {
+    G('mystats-empty').style.display = 'block';
+    return;
+  }
+
+  const maxSecs = Math.max(...days.map(d => d.secs), 1);
+  const barsEl = G('stats-bars');
+  const daysEl = G('stats-days');
+  barsEl.innerHTML = '';
+  daysEl.innerHTML = '';
+
+  days.forEach(day => {
+    const pct = Math.round((day.secs / maxSecs) * 100);
+    const hrs  = (day.secs / 3600).toFixed(1);
+    const isToday = day.key === new Date().toISOString().slice(0,10);
+    const barWrap = document.createElement('div');
+    barWrap.className = 'stats-bar-wrap';
+    barWrap.innerHTML = `
+      <div class="stats-bar-val">${day.secs >= 60 ? hrs+'س' : ''}</div>
+      <div class="stats-bar-outer">
+        <div class="stats-bar-inner${isToday ? ' today' : ''}" style="height:${Math.max(pct,2)}%"></div>
+      </div>`;
+    barsEl.appendChild(barWrap);
+    const lbl = document.createElement('div');
+    lbl.className = 'stats-day-lbl' + (isToday ? ' today' : '');
+    lbl.textContent = day.label;
+    daysEl.appendChild(lbl);
+  });
+
+  const tableEl = G('stats-table');
+  tableEl.innerHTML = '';
+  [...days].reverse().forEach(day => {
+    if (!day.secs) return;
+    const h = Math.floor(day.secs / 3600);
+    const m = Math.floor((day.secs % 3600) / 60);
+    const timeStr = h > 0 ? `${h}س ${m}د` : `${m}د`;
+    const isToday = day.key === new Date().toISOString().slice(0,10);
+    tableEl.innerHTML += `<div class="stats-row${isToday ? ' today-row' : ''}">
+      <span class="stats-row-day">${day.label}</span>
+      <div class="stats-row-bar-wrap">
+        <div class="stats-row-bar" style="width:${Math.round(day.secs/maxSecs*100)}%"></div>
+      </div>
+      <span class="stats-row-time">${timeStr}</span>
+    </div>`;
+  });
+
+  const avgSecs = Math.round(totalSecs / 7);
+  const activeDays = days.filter(d => d.secs > 0).length;
+  G('stats-summary').innerHTML = `
+    <div class="stats-sum-grid">
+      <div class="stats-sum-box"><div class="stats-sum-val">${(totalSecs/3600).toFixed(1)}س</div><div class="stats-sum-lbl">إجمالي الأسبوع</div></div>
+      <div class="stats-sum-box"><div class="stats-sum-val">${(avgSecs/3600).toFixed(1)}س</div><div class="stats-sum-lbl">متوسط يومي</div></div>
+      <div class="stats-sum-box"><div class="stats-sum-val">${activeDays}</div><div class="stats-sum-lbl">أيام نشطة</div></div>
+    </div>`;
+
+  const subjWrap = G('stats-subjects-wrap');
+  subjWrap.innerHTML = '';
+  const totalSubjSecs = Object.values(subjMap).reduce((a,b) => a+b, 0) || 1;
+  const sortedSubj = Object.entries(subjMap).sort((a,b) => b[1]-a[1]);
+  if (sortedSubj.length === 0) {
+    subjWrap.innerHTML = '<div style="text-align:center;color:var(--ink3);font-size:.82rem;padding:.5rem">لا توجد بيانات</div>';
+  } else {
+    sortedSubj.forEach(([subj, secs]) => {
+      const pct = Math.round(secs / totalSubjSecs * 100);
+      const h = Math.floor(secs/3600), m = Math.floor((secs%3600)/60);
+      const t = h > 0 ? `${h}س ${m}د` : `${m}د`;
+      subjWrap.innerHTML += `<div class="subj-row">
+        <span class="subj-name">${subj}</span>
+        <div class="subj-bar-wrap"><div class="subj-bar" style="width:${pct}%"></div></div>
+        <span class="subj-time">${t} (${pct}%)</span>
+      </div>`;
+    });
+  }
+
+  G('mystats-content').style.display = 'block';
+}
+
+// ══ يوتيوب مع الدراسة ══ (محذوف)
+function syncYtSubjects() {}
+function renderYtClock() {
+  const el = G('yt-mini-clock');
+  if (!el) return;
+  const h = String(Math.floor(studySec/3600)).padStart(2,'0');
+  const m = String(Math.floor(studySec%3600/60)).padStart(2,'0');
+  const s = String(studySec%60).padStart(2,'0');
+  el.textContent = h+':'+m+':'+s;
+}
+
+
 function goScreen(id) {
   ['s-auth','s-register','s-lobby','s-squad'].forEach(s => {
     const el = G(s); if(el) el.style.display='none';
@@ -1274,10 +1540,18 @@ select option{background:var(--c2)}
 .btn-t:hover{background:rgba(45,212,191,.16)}
 .btn-danger{background:rgba(248,113,113,.1);color:var(--red);border:1.5px solid rgba(248,113,113,.25);font-size:.85rem}
 .btn-danger:hover{background:rgba(248,113,113,.18)}
+.study-btns-row{display:flex;flex-direction:column;gap:.5rem;margin-bottom:.5rem}
 .btn-study{background:linear-gradient(135deg,#22c55e,#16a34a);color:#fff;font-size:1.05rem;
   padding:1.1rem;border-radius:13px;box-shadow:0 4px 16px rgba(34,197,94,.22)}
 .btn-study.running{background:linear-gradient(135deg,var(--red),#b91c1c);
   box-shadow:0 4px 16px rgba(248,113,113,.22);animation:pr 1.6s infinite}
+.btn-pause{background:rgba(96,165,250,.12);color:var(--blue);border:1.5px solid rgba(96,165,250,.25);
+  font-size:.92rem;padding:.88rem 1.4rem;border-radius:11px;display:flex;align-items:center;
+  justify-content:center;width:100%;font-family:'Tajawal',sans-serif;font-weight:800;
+  cursor:pointer;transition:all .18s;letter-spacing:.15px;margin-bottom:0}
+.btn-pause:hover{background:rgba(96,165,250,.22)}
+.btn-pause.paused{background:rgba(74,222,128,.1);color:var(--green);border-color:rgba(74,222,128,.25)}
+.btn-pause.paused:hover{background:rgba(74,222,128,.2)}
 @keyframes pr{0%,100%{box-shadow:0 0 0 0 rgba(248,113,113,.4)}50%{box-shadow:0 0 0 10px rgba(248,113,113,0)}}
 
 .sq-hero{background:linear-gradient(135deg,rgba(242,184,48,.08),rgba(45,212,191,.04));
@@ -1302,11 +1576,43 @@ select option{background:var(--c2)}
 .sl{font-size:.7rem;color:var(--ink3);font-weight:500}
 .sbox.tc .sv{color:var(--teal)} .sbox.bc .sv{color:var(--blue)} .sbox.gc .sv{color:var(--green)}
 
-.tabs{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:.3rem;background:var(--c1);
+.tabs{display:grid;grid-template-columns:repeat(5,1fr);gap:.3rem;background:var(--c1);
   border:1px solid var(--br);border-radius:13px;padding:.3rem;margin-bottom:.9rem}
-.tab{padding:.58rem .3rem;border-radius:9px;text-align:center;font-size:.75rem;font-weight:700;
+.tab{padding:.58rem .15rem;border-radius:9px;text-align:center;font-size:.68rem;font-weight:700;
   cursor:pointer;transition:all .18s;color:var(--ink3);border:none;background:none;font-family:'Tajawal',sans-serif}
 .tab.on{background:var(--c2);color:var(--gold);box-shadow:0 2px 10px rgba(0,0,0,.3)}
+
+/* ══ STATS ══ */
+.stats-chart-wrap{margin-bottom:1rem}
+.stats-bars{display:flex;align-items:flex-end;gap:6px;height:120px;margin-bottom:4px}
+.stats-bar-wrap{flex:1;display:flex;flex-direction:column;align-items:center;height:100%;justify-content:flex-end}
+.stats-bar-val{font-size:.6rem;color:var(--gold);font-weight:700;margin-bottom:3px;white-space:nowrap;font-family:'IBM Plex Mono',monospace}
+.stats-bar-outer{width:100%;flex:1;display:flex;align-items:flex-end;background:var(--c3);border-radius:6px;overflow:hidden}
+.stats-bar-inner{width:100%;background:rgba(96,165,250,.45);border-radius:6px;transition:height .4s ease;min-height:3px}
+.stats-bar-inner.today{background:linear-gradient(180deg,var(--gold),var(--gd))}
+.stats-days{display:flex;gap:6px}
+.stats-day-lbl{flex:1;text-align:center;font-size:.62rem;color:var(--ink3);font-weight:600}
+.stats-day-lbl.today{color:var(--gold);font-weight:800}
+
+.stats-row{display:flex;align-items:center;gap:.6rem;margin-bottom:.55rem}
+.stats-row-day{font-size:.75rem;font-weight:700;color:var(--ink2);width:2.5rem;flex-shrink:0;text-align:right}
+.stats-row-bar-wrap{flex:1;background:var(--c3);border-radius:4px;height:8px;overflow:hidden}
+.stats-row-bar{height:100%;background:linear-gradient(90deg,var(--blue),rgba(96,165,250,.5));border-radius:4px;transition:width .4s ease}
+.stats-row-time{font-size:.7rem;color:var(--ink2);width:3.5rem;text-align:left;font-family:'IBM Plex Mono',monospace;flex-shrink:0}
+.stats-row.today-row .stats-row-day{color:var(--gold)}
+.stats-row.today-row .stats-row-bar{background:linear-gradient(90deg,var(--gold),var(--gd))}
+.stats-row.today-row .stats-row-time{color:var(--gold)}
+
+.stats-sum-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:.6rem;margin-top:.8rem;padding-top:.8rem;border-top:1px solid var(--br)}
+.stats-sum-box{text-align:center}
+.stats-sum-val{font-size:1.25rem;font-weight:800;font-family:'IBM Plex Mono',monospace;color:var(--teal);line-height:1;margin-bottom:.25rem}
+.stats-sum-lbl{font-size:.65rem;color:var(--ink3);font-weight:500}
+
+.subj-row{display:flex;align-items:center;gap:.6rem;margin-bottom:.6rem}
+.subj-name{font-size:.75rem;font-weight:700;color:var(--ink);width:6rem;flex-shrink:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.subj-bar-wrap{flex:1;background:var(--c3);border-radius:4px;height:7px;overflow:hidden}
+.subj-bar{height:100%;background:linear-gradient(90deg,var(--teal),rgba(45,212,191,.4));border-radius:4px;transition:width .4s ease}
+.subj-time{font-size:.65rem;color:var(--ink2);width:5.5rem;text-align:left;font-family:'IBM Plex Mono',monospace;flex-shrink:0}
 
 /* ══ CHALLENGES ══ */
 .challenge-card{background:linear-gradient(135deg, rgba(15,22,36,.85), rgba(22,32,53,.85));
@@ -1693,7 +1999,9 @@ select option{background:var(--c2)}
     <button class="tab on" id="tab-team"       onclick="switchTab('team')">👥 الفريق</button>
     <button class="tab"    id="tab-study"      onclick="switchTab('study')">📚 دراسة</button>
     <button class="tab"    id="tab-rank"       onclick="switchTab('rank')">🏆 تصنيف</button>
-    <button class="tab"    id="tab-challenges" onclick="switchTab('challenges')">🎯 أهداف اليوم</button>
+    <button class="tab"    id="tab-challenges" onclick="switchTab('challenges')">🎯 أهداف</button>
+    <button class="tab"    id="tab-mystats"    onclick="switchTab('mystats')">📊 إحصائياتي</button>
+    <button class="tab"    id="tab-ai"         onclick="switchTab('ai')">🤖 معلم</button>
   </div>
 
   <!-- TAB: TEAM -->
@@ -1712,6 +2020,9 @@ select option{background:var(--c2)}
       <button class="smode-btn on" id="smode-normal" onclick="switchStudyMode('normal')">⏱ عداد حر</button>
       <button class="smode-btn"   id="smode-pomo"   onclick="switchStudyMode('pomo')">🍅 بومودورو</button>
     </div>
+
+
+    <!-- NORMAL STUDY PANEL -->
 
     <!-- POMODORO PANEL -->
     <div id="pomo-panel" style="display:none">
@@ -1788,9 +2099,14 @@ select option{background:var(--c2)}
   </div>
 
   <div id="timer-box"><div id="clock">00:00:00</div></div>
-  <button id="study-btn" class="btn btn-study" onclick="toggleStudy()">
-    <span id="study-lbl">▶ ابدأ الدراسة</span>
-  </button>
+  <div class="study-btns-row">
+    <button id="study-btn" class="btn btn-study" onclick="toggleStudy()">
+      <span id="study-lbl">▶ ابدأ الدراسة</span>
+    </button>
+    <button id="pause-btn" class="btn btn-pause" onclick="togglePause()" style="display:none">
+      <span id="pause-lbl">⏸ إيقاف مؤقت</span>
+    </button>
+  </div>
   <div class="pts-rule">دقيقة واحدة = نقطة واحدة لك وللفريق</div>
 </div>
 <div class="tip-box">
@@ -1816,6 +2132,36 @@ select option{background:var(--c2)}
     </div>
     <div id="rpanel-solo" style="display:none">
       <div id="lb-solo-wrap"></div>
+    </div>
+  </div>
+
+  <!-- TAB: MY STATS -->
+
+  <div id="panel-mystats" style="display:none">
+    <div class="card">
+      <div class="sec-ttl">📊 ساعات دراستي — آخر 7 أيام</div>
+      <div id="mystats-loading" style="text-align:center;color:var(--ink3);padding:1.5rem;font-size:.85rem">⏳ جاري التحميل...</div>
+      <div id="mystats-content" style="display:none">
+        <!-- Bar chart -->
+        <div class="stats-chart-wrap">
+          <div class="stats-bars" id="stats-bars"></div>
+          <div class="stats-days" id="stats-days"></div>
+        </div>
+        <!-- Daily breakdown -->
+        <div class="stats-table" id="stats-table"></div>
+        <!-- Summary -->
+        <div class="stats-summary" id="stats-summary"></div>
+      </div>
+      <div id="mystats-empty" style="display:none;text-align:center;color:var(--ink3);padding:1.5rem;font-size:.85rem">
+        لا توجد جلسات دراسة بعد — ابدأ الدراسة لترى إحصائياتك! 📚
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="sec-ttl">📚 توزيع المواد</div>
+      <div id="stats-subjects-wrap">
+        <div style="text-align:center;color:var(--ink3);font-size:.82rem;padding:.5rem">سيظهر هنا بعد التحميل</div>
+      </div>
     </div>
   </div>
 
