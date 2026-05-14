@@ -600,31 +600,72 @@ window.acceptChallenge = async (chalId) => {
 };
 
 function saveStudyState() {
-  // نحفظ الثواني المتراكمة الفعلية + وقت آخر حفظ
   localStorage.setItem('mizan_study_sec',    studySec);
-  localStorage.setItem('mizan_study_saved',  Date.now()); // وقت الحفظ الأخير
+  localStorage.setItem('mizan_study_saved',  Date.now());
   localStorage.setItem('mizan_study_active', studyActive ? '1' : '0');
+  // نحفظ الـ timestamp الحقيقي لحساب وقت الغياب بدقة
+  if (studyActive) {
+    localStorage.setItem('mizan_study_bg_ts', Date.now());
+  }
 }
 function clearStudyState() {
   localStorage.removeItem('mizan_study_sec');
   localStorage.removeItem('mizan_study_saved');
   localStorage.removeItem('mizan_study_active');
+  localStorage.removeItem('mizan_study_bg_ts');
 }
 function restoreStudyTimer() {
   const saved     = localStorage.getItem('mizan_study_sec');
   const savedTime = localStorage.getItem('mizan_study_saved');
   const wasActive = localStorage.getItem('mizan_study_active');
   if (!saved || !savedTime) return;
-  // نرجّع فقط الثواني المحفوظة — بدون إضافة وقت الغياب
-  // (لو كان نشطاً ورجع، يبدأ العداد من نفس الرقم بدون قفز)
+
+  // نرجّع الثواني المحفوظة فقط — بدون إضافة وقت الغياب عند إعادة الفتح
   studySec = parseInt(saved) || 0;
+  localStorage.removeItem('mizan_study_bg_ts');
   lastStudyTime = Date.now() - studySec * 1000;
-  if (wasActive === '1' && studySec >= 60) {
+
+  if (wasActive === '1') {
     startStudy();
   } else {
     renderClock();
   }
 }
+
+// ── معالجة الخروج للخلفية (يوتيوب، واتساب، إلخ) ──
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    // الصفحة أصبحت في الخلفية — نحفظ الـ timestamp الحالي
+    if (studyActive) {
+      localStorage.setItem('mizan_study_bg_ts', Date.now());
+      saveStudyState();
+    }
+  } else {
+    // الصفحة رجعت للواجهة — نحسب الوقت الذي مضى
+    if (studyActive) {
+      const bgTs = localStorage.getItem('mizan_study_bg_ts');
+      if (bgTs) {
+        const absenceSeconds = Math.floor((Date.now() - parseInt(bgTs)) / 1000);
+        if (absenceSeconds > 0 && absenceSeconds < 43200) {
+          // نوقف الـ interval القديم ونبدأ جديد بالثواني المحدّثة
+          clearInterval(studyTick);
+          studySec += absenceSeconds;
+          localStorage.removeItem('mizan_study_bg_ts');
+          studyActive = false; // نعيد startStudy من صفر لتجديد segmentStart
+          startStudy();
+        }
+      }
+    }
+  }
+});
+
+// احتياطي عند إغلاق/إعادة تحميل الصفحة
+window.addEventListener('pagehide', () => {
+  if (studyActive) {
+    localStorage.setItem('mizan_study_bg_ts', Date.now());
+    saveStudyState();
+  }
+});
 
 let sessionMode      = false;
 let sessionTarget    = 0;
@@ -912,6 +953,197 @@ window.deleteGoal = i => {
     if (k.startsWith('mizan_goals_') && !k.endsWith(today)) localStorage.removeItem(k);
   });
 })();
+
+// ══ POMODORO ══
+let pomoWorkMins  = 25;
+let pomoBreakMins = 5;
+let pomoTotalRounds = 4;
+let pomoRound     = 0;
+let pomoPhase     = 'work'; // 'work' | 'break'
+let pomoSec       = 0;
+let pomoActive    = false;
+let pomoTick      = null;
+let pomoBgTs      = null;
+
+const POMO_CIRCUMFERENCE = 2 * Math.PI * 52; // 326.7
+
+function pomoInit() {
+  pomoSec = pomoWorkMins * 60;
+  pomoPhase = 'work';
+  renderPomoRounds();
+  renderPomoClock();
+  updatePomoArc();
+}
+
+function renderPomoRounds() {
+  const row = document.getElementById('pomo-rounds-row');
+  if (!row) return;
+  row.innerHTML = '';
+  for (let i = 0; i < pomoTotalRounds; i++) {
+    const d = document.createElement('div');
+    d.className = 'pomo-dot' + (i < pomoRound ? ' done' : i === pomoRound && pomoActive ? ' active' : '');
+    d.textContent = i < pomoRound ? '✓' : '🍅';
+    row.appendChild(d);
+  }
+}
+
+function renderPomoClock() {
+  const m = String(Math.floor(pomoSec / 60)).padStart(2,'0');
+  const s = String(pomoSec % 60).padStart(2,'0');
+  const el = document.getElementById('pomo-clock');
+  if (el) el.textContent = m + ':' + s;
+  const icon = document.getElementById('pomo-phase-icon');
+  const lbl  = document.getElementById('pomo-phase-lbl');
+  if (icon) icon.textContent = pomoPhase === 'work' ? '🍅' : '☕';
+  if (lbl)  lbl.textContent  = pomoPhase === 'work' ? 'دراسة' : 'استراحة';
+}
+
+function updatePomoArc() {
+  const arc = document.getElementById('pomo-arc');
+  if (!arc) return;
+  const total = (pomoPhase === 'work' ? pomoWorkMins : pomoBreakMins) * 60;
+  const ratio = total > 0 ? pomoSec / total : 0;
+  arc.style.strokeDashoffset = POMO_CIRCUMFERENCE * (1 - ratio);
+  arc.classList.toggle('break-mode', pomoPhase === 'break');
+}
+
+window.pomoToggle = () => { pomoActive ? pomoPause() : pomoStart(); };
+
+function pomoStart() {
+  if (pomoSec <= 0) pomoInit();
+  pomoActive = true;
+  const btn = document.getElementById('pomo-main-btn');
+  if (btn) { btn.textContent = '⏸'; btn.classList.add('running'); }
+  const segStart = Date.now();
+  const secAtStart = pomoSec;
+  renderPomoRounds();
+  pomoTick = setInterval(() => {
+    const elapsed = Math.floor((Date.now() - segStart) / 1000);
+    pomoSec = Math.max(0, secAtStart - elapsed);
+    renderPomoClock();
+    updatePomoArc();
+    if (pomoSec <= 0) {
+      clearInterval(pomoTick);
+      pomoTick = null;
+      pomoActive = false;
+      const btn2 = document.getElementById('pomo-main-btn');
+      if (btn2) { btn2.textContent = '▶'; btn2.classList.remove('running'); }
+      if (pomoPhase === 'work') {
+        pomoRound++;
+        const earnedPts = pomoWorkMins;
+        // احتساب النقاط تلقائياً
+        if (uid && squadId && earnedPts > 0) {
+          const pending = JSON.parse(localStorage.getItem('mizan_pending_pts') || '[]');
+          const subj = document.getElementById('subj-sel')?.value || '—';
+          pending.push({ pts: earnedPts, secs: pomoWorkMins * 60, subj, uid, squadId, ts: Date.now() });
+          localStorage.setItem('mizan_pending_pts', JSON.stringify(pending));
+          flash('+' + earnedPts + ' ⚡');
+          flushPendingPts();
+        }
+        if (pomoRound >= pomoTotalRounds) {
+          toast('🎉 أتممت ' + pomoTotalRounds + ' جولات! استراحة طويلة تستاهلها يا بطل 🏆', 'ok');
+          pomoRound = 0;
+          pomoPhase = 'work';
+          pomoInit();
+        } else {
+          toast('✅ جولة ' + pomoRound + ' خلصت! خذ استراحة ☕', 'ok');
+          pomoPhase = 'break';
+          pomoSec = pomoBreakMins * 60;
+          renderPomoRounds();
+          renderPomoClock();
+          updatePomoArc();
+          // تشغيل الاستراحة تلقائياً
+          setTimeout(() => { if (!pomoActive) pomoStart(); }, 1500);
+        }
+      } else {
+        toast('💪 انتهت الاستراحة! ابدأ الجولة ' + (pomoRound + 1), 'ok');
+        pomoPhase = 'work';
+        pomoSec = pomoWorkMins * 60;
+        renderPomoClock();
+        updatePomoArc();
+      }
+    }
+  }, 500);
+}
+
+function pomoPause() {
+  pomoActive = false;
+  clearInterval(pomoTick);
+  pomoTick = null;
+  const btn = document.getElementById('pomo-main-btn');
+  if (btn) { btn.textContent = '▶'; btn.classList.remove('running'); }
+  renderPomoRounds();
+}
+
+window.pomoReset = () => {
+  pomoPause();
+  pomoRound = 0;
+  pomoInit();
+};
+
+window.pomoSkip = () => {
+  pomoPause();
+  if (pomoPhase === 'work') {
+    pomoPhase = 'break';
+    pomoSec = pomoBreakMins * 60;
+  } else {
+    pomoPhase = 'work';
+    pomoRound = Math.min(pomoRound + 1, pomoTotalRounds - 1);
+    pomoSec = pomoWorkMins * 60;
+  }
+  renderPomoRounds();
+  renderPomoClock();
+  updatePomoArc();
+};
+
+window.pomoAdjust = (type, delta) => {
+  if (type === 'work') {
+    pomoWorkMins = Math.max(5, Math.min(60, pomoWorkMins + delta));
+    document.getElementById('pomo-work-val').textContent = pomoWorkMins;
+    if (pomoPhase === 'work' && !pomoActive) { pomoSec = pomoWorkMins * 60; renderPomoClock(); updatePomoArc(); }
+  } else {
+    pomoBreakMins = Math.max(1, Math.min(30, pomoBreakMins + delta));
+    document.getElementById('pomo-break-val').textContent = pomoBreakMins;
+    if (pomoPhase === 'break' && !pomoActive) { pomoSec = pomoBreakMins * 60; renderPomoClock(); updatePomoArc(); }
+  }
+};
+
+window.switchStudyMode = (mode) => {
+  const normalPanel = document.getElementById('normal-panel');
+  const pomoPanel   = document.getElementById('pomo-panel');
+  const btnNormal   = document.getElementById('smode-normal');
+  const btnPomo     = document.getElementById('smode-pomo');
+  if (mode === 'pomo') {
+    normalPanel.style.display = 'none';
+    pomoPanel.style.display   = 'block';
+    btnNormal.classList.remove('on');
+    btnPomo.classList.add('on');
+    pomoInit();
+  } else {
+    pomoPanel.style.display   = 'none';
+    normalPanel.style.display = 'block';
+    btnPomo.classList.remove('on');
+    btnNormal.classList.add('on');
+    pomoPause();
+  }
+};
+
+// معالجة الخلفية للبومودورو
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    if (pomoActive) pomoBgTs = Date.now();
+  } else {
+    if (pomoActive && pomoBgTs) {
+      const elapsed = Math.floor((Date.now() - pomoBgTs) / 1000);
+      pomoBgTs = null;
+      clearInterval(pomoTick);
+      pomoTick = null;
+      pomoSec = Math.max(0, pomoSec - elapsed);
+      pomoActive = false;
+      pomoStart();
+    }
+  }
+});
 
 function goScreen(id) {
   ['s-auth','s-register','s-lobby','s-squad'].forEach(s => {
@@ -1250,6 +1482,61 @@ select option{background:var(--c2)}
   .tab{font-size:.6rem}
   .chal-teams{font-size:.7rem}
 }
+
+/* ══ STUDY MODE SWITCHER ══ */
+.study-mode-row{display:grid;grid-template-columns:1fr 1fr;gap:.5rem;margin-bottom:.9rem}
+.smode-btn{background:var(--c1);border:1.5px solid var(--br);border-radius:11px;
+  color:var(--ink2);font-family:'Tajawal',sans-serif;font-size:.9rem;font-weight:700;
+  padding:.75rem;cursor:pointer;transition:all .2s}
+.smode-btn.on{background:rgba(242,184,48,.1);border-color:rgba(242,184,48,.45);color:var(--gold)}
+
+/* ══ POMODORO ══ */
+.pomo-ring-wrap{position:relative;width:180px;height:180px;margin:0 auto 1.2rem}
+.pomo-ring{width:100%;height:100%;transform:rotate(-90deg)}
+.pomo-track{fill:none;stroke:var(--c3);stroke-width:8}
+.pomo-fill{fill:none;stroke:var(--gold);stroke-width:8;stroke-linecap:round;
+  stroke-dasharray:326.7;stroke-dashoffset:0;transition:stroke-dashoffset .8s ease, stroke .4s}
+.pomo-fill.break-mode{stroke:var(--teal)}
+.pomo-center{position:absolute;inset:0;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;gap:.15rem}
+.pomo-phase-icon{font-size:1.6rem;line-height:1}
+.pomo-time{font-family:'IBM Plex Mono',monospace;font-size:2rem;font-weight:600;
+  color:var(--ink);letter-spacing:1px;line-height:1}
+.pomo-phase-lbl{font-size:.72rem;color:var(--ink3);font-weight:600;letter-spacing:.5px;text-transform:uppercase}
+
+.pomo-rounds{display:flex;justify-content:center;gap:.45rem;margin-bottom:1.1rem;flex-wrap:wrap}
+.pomo-dot{width:22px;height:22px;border-radius:50%;border:2px solid var(--br);
+  background:var(--c2);font-size:.75rem;display:flex;align-items:center;justify-content:center;
+  transition:all .3s}
+.pomo-dot.done{background:var(--gold);border-color:var(--gold);box-shadow:0 0 8px rgba(242,184,48,.4)}
+.pomo-dot.active{border-color:var(--gold);background:rgba(242,184,48,.15);animation:pr 1.4s infinite}
+
+.pomo-controls{display:flex;align-items:center;justify-content:center;gap:1rem;margin-bottom:1.2rem}
+.pomo-btn{border:none;cursor:pointer;border-radius:50%;display:flex;align-items:center;
+  justify-content:center;font-family:'Tajawal',sans-serif;transition:all .18s}
+.pomo-main{width:62px;height:62px;font-size:1.5rem;
+  background:linear-gradient(135deg,var(--gold),var(--gd));color:#06080f;
+  box-shadow:0 4px 18px rgba(242,184,48,.32)}
+.pomo-main:hover{transform:scale(1.06);box-shadow:0 6px 22px rgba(242,184,48,.45)}
+.pomo-main.running{background:linear-gradient(135deg,var(--red),#b91c1c);
+  box-shadow:0 4px 18px rgba(248,113,113,.32);animation:pr 1.6s infinite}
+.pomo-reset,.pomo-skip{width:46px;height:46px;font-size:1.1rem;
+  background:var(--c2);color:var(--ink2);border:1.5px solid var(--br)}
+.pomo-reset:hover,.pomo-skip:hover{border-color:rgba(242,184,48,.3);color:var(--gold)}
+
+.pomo-settings{background:var(--c2);border:1px solid var(--br);border-radius:12px;
+  padding:.9rem 1rem;margin-bottom:1rem;display:flex;flex-direction:column;gap:.7rem}
+.pomo-set-row{display:flex;align-items:center;gap:.7rem}
+.pomo-set-lbl{font-size:.82rem;color:var(--ink2);font-weight:600;flex:1;min-width:60px}
+.pomo-set-ctrl{display:flex;align-items:center;gap:.5rem}
+.pomo-set-ctrl button{width:28px;height:28px;border-radius:7px;border:1.5px solid var(--br);
+  background:var(--c1);color:var(--gold);font-size:1rem;font-weight:700;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;transition:all .15s}
+.pomo-set-ctrl button:hover{background:rgba(242,184,48,.1)}
+.pomo-set-ctrl span{font-family:'IBM Plex Mono',monospace;font-size:.9rem;
+  color:var(--ink);font-weight:600;min-width:22px;text-align:center}
+.pomo-set-unit{font-size:.75rem;color:var(--ink3)}
+
 </style>
 
 </head>
@@ -1419,6 +1706,60 @@ select option{background:var(--c2)}
   <!-- TAB: STUDY -->
 
   <div id="panel-study" style="display:none">
+
+    <!-- study mode switcher -->
+    <div class="study-mode-row">
+      <button class="smode-btn on" id="smode-normal" onclick="switchStudyMode('normal')">⏱ عداد حر</button>
+      <button class="smode-btn"   id="smode-pomo"   onclick="switchStudyMode('pomo')">🍅 بومودورو</button>
+    </div>
+
+    <!-- POMODORO PANEL -->
+    <div id="pomo-panel" style="display:none">
+      <div class="card">
+        <div class="sec-ttl">🍅 بومودورو</div>
+        <div class="pomo-ring-wrap">
+          <svg class="pomo-ring" viewBox="0 0 120 120">
+            <circle class="pomo-track" cx="60" cy="60" r="52"/>
+            <circle class="pomo-fill"  cx="60" cy="60" r="52" id="pomo-arc"/>
+          </svg>
+          <div class="pomo-center">
+            <div class="pomo-phase-icon" id="pomo-phase-icon">🍅</div>
+            <div class="pomo-time"       id="pomo-clock">25:00</div>
+            <div class="pomo-phase-lbl"  id="pomo-phase-lbl">دراسة</div>
+          </div>
+        </div>
+        <div class="pomo-rounds" id="pomo-rounds-row"></div>
+        <div class="pomo-controls">
+          <button class="pomo-btn pomo-reset" onclick="pomoReset()" title="إعادة">↺</button>
+          <button class="pomo-btn pomo-main"  id="pomo-main-btn" onclick="pomoToggle()">▶</button>
+          <button class="pomo-btn pomo-skip"  onclick="pomoSkip()" title="تخطي">⏭</button>
+        </div>
+        <div class="pomo-settings">
+          <div class="pomo-set-row">
+            <span class="pomo-set-lbl">🍅 دراسة</span>
+            <div class="pomo-set-ctrl">
+              <button onclick="pomoAdjust('work',-5)">−</button>
+              <span id="pomo-work-val">25</span>
+              <button onclick="pomoAdjust('work',5)">+</button>
+            </div>
+            <span class="pomo-set-unit">دقيقة</span>
+          </div>
+          <div class="pomo-set-row">
+            <span class="pomo-set-lbl">☕ استراحة</span>
+            <div class="pomo-set-ctrl">
+              <button onclick="pomoAdjust('break',-5)">−</button>
+              <span id="pomo-break-val">5</span>
+              <button onclick="pomoAdjust('break',5)">+</button>
+            </div>
+            <span class="pomo-set-unit">دقيقة</span>
+          </div>
+        </div>
+        <div class="pts-rule">كل جولة بومودورو مكتملة = نقاط تُحتسب تلقائياً ⚡</div>
+      </div>
+    </div>
+
+    <!-- NORMAL STUDY PANEL -->
+    <div id="normal-panel">
     <div class="card">
       <div class="sec-ttl">📚 جلسة الدراسة</div>
       <button class="btn btn-p" onclick="openSessionModal()" style="margin-bottom:1rem">⏱ ابدأ جلسة مخطط لها</button>
@@ -1459,7 +1800,7 @@ select option{background:var(--c2)}
   <div class="tip-li"><span>⚡</span><span>كل دقيقة = نقطة فورية</span></div>
   <div class="tip-li"><span>🎯</span><span>متابعة مباشرة لتقدمك نحو الهدف</span></div>
 </div>
-
+    </div><!-- end normal-panel -->
 
   </div>
 
