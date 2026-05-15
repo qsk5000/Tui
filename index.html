@@ -721,7 +721,8 @@ function completeSession() {
   toast('أحسنت! اكملت الجلسة! 🎉','ok');
 }
 
-window.toggleStudy = () => { studyActive ? stopStudy() : startStudy(); };
+window.toggleStudy  = () => { studyActive ? stopStudy()   : startStudy(); };
+window.pauseResume  = () => { studyActive ? pauseStudy() : resumeStudy(); };
 
 function startStudy() {
   studyActive     = true;
@@ -730,8 +731,14 @@ function startStudy() {
   const segmentStart = Date.now();
   const secAtStart   = studySec; // الثواني المتراكمة قبل هذه الجلسة الفرعية
   G('study-btn').classList.add('running');
-  setText('study-lbl', sessionMode ? '⏹ استراحة' : '⏹ إيقاف الجلسة');
+  setText('study-lbl', '⏹ إنهاء الجلسة');
   G('timer-box').style.display = 'flex';
+  // إظهار زر الإيقاف المؤقت وتحديثه
+  const pb = G('pause-btn');
+  if (pb) { pb.style.display = 'flex'; pb.textContent = '⏸'; pb.classList.add('paused-state'); }
+  // تحديث اسم المادة في العداد
+  const subjEl = G('timer-subject-lbl');
+  if (subjEl) { const sel = G('subj-sel'); subjEl.textContent = sel ? sel.value : '📚 جاري الدراسة'; }
   renderClock();
   studyTick = setInterval(() => {
     // الثواني = ما كان محفوظاً + ما مضى منذ آخر start
@@ -766,13 +773,22 @@ function pauseStudy() {
   studyActive = false;
   clearInterval(studyTick);
   G('study-btn').classList.remove('running');
-  setText('study-lbl', sessionMode ? '▶ استكمل الدراسة' : '▶ ابدأ الدراسة');
+  setText('study-lbl', '⏹ إنهاء الجلسة');
+  const pb = G('pause-btn');
+  if (pb) { pb.textContent = '▶'; pb.classList.remove('paused-state'); }
+}
+
+function resumeStudy() {
+  if (studyActive) return;
+  startStudy();
 }
 
 function stopStudyQuiet() {
   studyActive = false;
   clearInterval(studyTick);
   studySec = 0;
+  const pb = G('pause-btn');
+  if (pb) { pb.style.display = 'none'; pb.textContent = '⏸'; pb.classList.add('paused-state'); }
   clearStudyState();
 }
 
@@ -782,6 +798,8 @@ async function stopStudy() {
   G('study-btn').classList.remove('running');
   setText('study-lbl', '▶ ابدأ الدراسة');
   G('timer-box').style.display = 'none';
+  const pb = G('pause-btn');
+  if (pb) { pb.style.display = 'none'; pb.textContent = '⏸'; pb.classList.add('paused-state'); }
   clearStudyState();
 
   if (studySec < 60) {
@@ -1418,12 +1436,34 @@ select option{background:var(--c2)}
 .as-nm{font-size:.88rem;font-weight:700;color:var(--ink)}
 .as-info{display:flex;justify-content:space-between;font-size:.75rem;color:var(--ink3);margin-bottom:.6rem}
 
-#timer-box{display:none;align-items:center;justify-content:center;background:var(--c2);
-  border-radius:12px;padding:1.2rem;margin-bottom:.8rem;border:1px solid rgba(242,184,48,.1);position:relative;overflow:hidden}
+#timer-box{display:none;flex-direction:column;align-items:center;justify-content:center;
+  background:linear-gradient(145deg,rgba(15,22,36,.95),rgba(22,32,53,.95));
+  border-radius:20px;padding:1.6rem 1.2rem 1.2rem;margin-bottom:.8rem;
+  border:1px solid rgba(242,184,48,.18);position:relative;overflow:hidden;
+  box-shadow:0 0 40px rgba(242,184,48,.07), inset 0 0 30px rgba(242,184,48,.03);}
 #timer-box::before{content:'';position:absolute;inset:0;
-  background:radial-gradient(ellipse at 50%,rgba(242,184,48,.05) 0%,transparent 65%)}
-#clock{font-family:'IBM Plex Mono',monospace;font-size:2.6rem;font-weight:600;color:var(--gold);
-  letter-spacing:5px;text-shadow:0 0 30px rgba(242,184,48,.4);position:relative;z-index:1}
+  background:radial-gradient(ellipse at 50% 30%,rgba(242,184,48,.08) 0%,transparent 65%);pointer-events:none}
+.timer-ring-wrap{position:relative;display:flex;align-items:center;justify-content:center;
+  width:100%;margin-bottom:.9rem}
+.timer-pulse-ring{position:absolute;width:160px;height:160px;border-radius:50%;
+  border:2px solid rgba(242,184,48,.12);animation:timerPulse 2.2s ease-in-out infinite;pointer-events:none}
+@keyframes timerPulse{0%,100%{transform:scale(1);opacity:.5}50%{transform:scale(1.06);opacity:.15}}
+.timer-inner{display:flex;flex-direction:column;align-items:center;gap:.25rem;position:relative;z-index:1}
+.timer-label-top{font-size:.72rem;font-weight:700;color:var(--gold);letter-spacing:.8px;
+  text-transform:uppercase;opacity:.8;font-family:'Tajawal',sans-serif}
+.timer-label-bot{font-size:.65rem;color:var(--ink3);letter-spacing:.5px;font-family:'Tajawal',sans-serif}
+#clock{font-family:'IBM Plex Mono',monospace;font-size:2.8rem;font-weight:600;color:var(--gold);
+  letter-spacing:6px;text-shadow:0 0 28px rgba(242,184,48,.5),0 0 60px rgba(242,184,48,.15);
+  position:relative;z-index:1;line-height:1.1}
+.timer-controls{display:flex;align-items:center;justify-content:center;gap:.8rem;position:relative;z-index:1}
+.timer-pause-btn{width:48px;height:48px;border-radius:50%;border:2px solid rgba(242,184,48,.35);
+  background:rgba(242,184,48,.1);color:var(--gold);font-size:1.15rem;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;transition:all .2s;
+  box-shadow:0 0 14px rgba(242,184,48,.1)}
+.timer-pause-btn:hover{background:rgba(242,184,48,.2);border-color:var(--gold);
+  box-shadow:0 0 20px rgba(242,184,48,.25);transform:scale(1.08)}
+.timer-pause-btn:not(.paused-state){background:rgba(45,212,191,.1);border-color:rgba(45,212,191,.35);color:var(--teal)}
+.timer-pause-btn:not(.paused-state):hover{background:rgba(45,212,191,.2);border-color:var(--teal)}
 .pts-rule{font-size:.74rem;color:var(--ink3);text-align:center;margin-top:.5rem;
   display:flex;align-items:center;justify-content:center;gap:.4rem}
 .pts-rule::before,.pts-rule::after{content:'';flex:1;height:1px;background:var(--br)}
@@ -1787,7 +1827,19 @@ select option{background:var(--c2)}
     </div>
   </div>
 
-  <div id="timer-box"><div id="clock">00:00:00</div></div>
+  <div id="timer-box">
+    <div class="timer-ring-wrap">
+      <div class="timer-pulse-ring"></div>
+      <div class="timer-inner">
+        <div class="timer-label-top" id="timer-subject-lbl">📚 جاري الدراسة</div>
+        <div id="clock">00:00:00</div>
+        <div class="timer-label-bot">الوقت المنقضي</div>
+      </div>
+    </div>
+    <div class="timer-controls">
+      <button id="pause-btn" class="timer-pause-btn" onclick="pauseResume()" style="display:none">⏸</button>
+    </div>
+  </div>
   <button id="study-btn" class="btn btn-study" onclick="toggleStudy()">
     <span id="study-lbl">▶ ابدأ الدراسة</span>
   </button>
