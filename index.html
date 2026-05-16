@@ -39,6 +39,8 @@ let studySec    = 0;
 let studyTick   = null;
 let lastStudyTime = 0;
 let threeHourWarned = false;
+let currentSessionId = null; // ← مفتاح إصلاح الجلسات المكررة
+let isSaving = false;        // ← يمنع stopStudy تشتغل مرتين
 
 const G       = id => document.getElementById(id);
 const setText = (id,v) => { const e=G(id); if(e) e.textContent=v; };
@@ -603,16 +605,17 @@ function saveStudyState() {
   localStorage.setItem('mizan_study_sec',    studySec);
   localStorage.setItem('mizan_study_saved',  Date.now());
   localStorage.setItem('mizan_study_active', studyActive ? '1' : '0');
-  // نحفظ الـ timestamp الحقيقي لحساب وقت الغياب بدقة
-  if (studyActive) {
-    localStorage.setItem('mizan_study_bg_ts', Date.now());
-  }
+  // sessionId محفوظ بالفعل من startStudy — هذا backup فقط
+  if (currentSessionId) localStorage.setItem('mizan_session_id', currentSessionId);
+  if (studyActive) localStorage.setItem('mizan_study_bg_ts', Date.now());
 }
 function clearStudyState() {
   localStorage.removeItem('mizan_study_sec');
   localStorage.removeItem('mizan_study_saved');
   localStorage.removeItem('mizan_study_active');
   localStorage.removeItem('mizan_study_bg_ts');
+  localStorage.removeItem('mizan_session_id');
+  currentSessionId = null;
 }
 function restoreStudyTimer() {
   const saved     = localStorage.getItem('mizan_study_sec');
@@ -620,8 +623,9 @@ function restoreStudyTimer() {
   const wasActive = localStorage.getItem('mizan_study_active');
   if (!saved || !savedTime) return;
 
-  // نرجّع الثواني المحفوظة فقط — بدون إضافة وقت الغياب عند إعادة الفتح
   studySec = parseInt(saved) || 0;
+  // ← نسترجع نفس الـ sessionId — هذا يمنع تسجيل جلسة مكررة
+  currentSessionId = localStorage.getItem('mizan_session_id') || null;
   localStorage.removeItem('mizan_study_bg_ts');
   lastStudyTime = Date.now() - studySec * 1000;
 
@@ -694,6 +698,8 @@ window.startSession = async () => {
   isOnBreak        = false;
   studySec         = 0;
   threeHourWarned  = false;
+  currentSessionId = null; // ← جلسة جديدة = ID جديد
+  isSaving         = false; // ← reset الـ flag
 
   closeSessionModal();
   switchTab('study');
@@ -721,15 +727,20 @@ function completeSession() {
   toast('أحسنت! اكملت الجلسة! 🎉','ok');
 }
 
-window.toggleStudy  = () => { studyActive ? stopStudy()   : startStudy(); };
+window.toggleStudy  = () => { if (isSaving) return; studyActive ? stopStudy() : startStudy(); };
 window.pauseResume  = () => { studyActive ? pauseStudy() : resumeStudy(); };
 
 function startStudy() {
   studyActive     = true;
   threeHourWarned = false;
-  // نحفظ وقت بداية هذه الجلسة الفرعية فقط (لحساب ما مضى منذ آخر ضغطة start)
+  // ← توليد sessionId جديد فقط إذا ما عنده واحد
+  if (!currentSessionId) {
+    currentSessionId = 'sess_' + Date.now() + '_' + Math.random().toString(36).slice(2,7);
+  }
+  // ← نحفظه فوراً في localStorage — حتى لو الصفحة انغلقت قبل أول tick
+  localStorage.setItem('mizan_session_id', currentSessionId);
   const segmentStart = Date.now();
-  const secAtStart   = studySec; // الثواني المتراكمة قبل هذه الجلسة الفرعية
+  const secAtStart   = studySec;
   G('study-btn').classList.add('running');
   setText('study-lbl', '⏹ إنهاء الجلسة');
   G('timer-box').style.display = 'flex';
@@ -793,6 +804,9 @@ function stopStudyQuiet() {
 }
 
 async function stopStudy() {
+  if (isSaving) return; // ← منع التكرار من ضغطات متعددة
+  isSaving = true;
+
   studyActive = false;
   clearInterval(studyTick);
   G('study-btn').classList.remove('running');
@@ -804,7 +818,9 @@ async function stopStudy() {
 
   if (studySec < 60) {
     toast('الجلسة أقل من دقيقة — لم تُحتسب','warn');
-    studySec = 0; renderClock(); return;
+    studySec = 0; renderClock();
+    isSaving = false;
+    return;
   }
 
   const pts        = Math.floor(studySec/60);
@@ -812,22 +828,21 @@ async function stopStudy() {
   const subj       = G('subj-sel').value;
   const sessionSecs = studySec;
 
-  // ✅ نصفّر فوراً قبل أي await — يمنع التكرار حتى لو النت مقطوع
   studySec = 0;
   renderClock();
 
-  // نحفظ في queue محلي أولاً
   const pending = JSON.parse(localStorage.getItem('mizan_pending_pts') || '[]');
-  pending.push({ pts, secs, subj, uid, squadId, ts: Date.now() });
+  pending.push({ pts, secs, subj, uid, squadId, ts: Date.now(), sessionId: currentSessionId });
   localStorage.setItem('mizan_pending_pts', JSON.stringify(pending));
+  currentSessionId = null;
 
   toast('أحسنت! +'+pts+' نقطة ('+subj+') — جاري الحفظ...','ok');
   flash('+'+pts+' ⚡');
   const tip = getMizanTip(sessionSecs);
   setTimeout(() => toast('💬 ' + tip, 'ok'), 1000);
 
-  // نرسل للسيرفر
   await flushPendingPts();
+  isSaving = false;
 }
 
 // يرسل كل النقاط المحفوظة محلياً للسيرفر
@@ -836,21 +851,22 @@ async function flushPendingPts() {
   if (pending.length === 0) return;
 
   const toSend = [...pending];
-  // نمسح القائمة أولاً قبل الإرسال لمنع التكرار
   localStorage.removeItem('mizan_pending_pts');
 
   try {
     for (const entry of toSend) {
       await updateDoc(doc(db,'users', entry.uid),    { totalPts:increment(entry.pts), totalSec:increment(entry.secs) });
       await updateDoc(doc(db,'squads',entry.squadId), { totalPts:increment(entry.pts), totalSec:increment(entry.secs) });
-      await setDoc(doc(collection(db,'sessions')), {
+
+      // ← استخدام sessionId ثابت كـ document ID — يمنع التكرار 100%
+      const sessionDocId = entry.sessionId || ('sess_' + entry.ts);
+      await setDoc(doc(db,'sessions', sessionDocId), {
         uid: entry.uid, squadId: entry.squadId, subject: entry.subj,
         seconds: entry.secs, pts: entry.pts, ts: serverTimestamp(),
         sessionMode, sessionTarget
       });
     }
   } catch(e) {
-    // لو فشل الإرسال، نرجع القائمة للـ localStorage
     const stillPending = JSON.parse(localStorage.getItem('mizan_pending_pts') || '[]');
     localStorage.setItem('mizan_pending_pts', JSON.stringify([...toSend, ...stillPending]));
     toast('لا يوجد اتصال — ستُحفظ النقاط عند عودة النت 📶','warn');
@@ -1190,7 +1206,69 @@ function goScreen(id) {
   --ink3:  #475569;
   --br:    rgba(255,255,255,.055);
   --r:     15px;
+  /* ثيم متغيرات — تتغير حسب اختيار الطالب */
+  --accent:      #f2b830;
+  --accent-dark: #d4950a;
+  --accent-glow: rgba(242,184,48,.16);
+  --accent-rgb:  242,184,48;
 }
+
+/* ══ الثيمات ══ */
+body.theme-purple{
+  --bg:#07040f; --c1:#120b1e; --c2:#1a1030; --c3:#241640;
+  --accent:#a78bfa; --accent-dark:#7c3aed; --accent-glow:rgba(167,139,250,.16); --accent-rgb:167,139,250;
+  --gold:#a78bfa; --gd:#7c3aed; --glow:rgba(167,139,250,.16);
+}
+body.theme-emerald{
+  --bg:#030f0a; --c1:#071a10; --c2:#0d2518; --c3:#133020;
+  --accent:#34d399; --accent-dark:#059669; --accent-glow:rgba(52,211,153,.16); --accent-rgb:52,211,153;
+  --gold:#34d399; --gd:#059669; --glow:rgba(52,211,153,.16);
+}
+body.theme-rose{
+  --bg:#0f0608; --c1:#1e0c10; --c2:#2d1118; --c3:#3d1620;
+  --accent:#fb7185; --accent-dark:#e11d48; --accent-glow:rgba(251,113,133,.16); --accent-rgb:251,113,133;
+  --gold:#fb7185; --gd:#e11d48; --glow:rgba(251,113,133,.16);
+}
+body.theme-sky{
+  --bg:#040810; --c1:#0a1220; --c2:#101c30; --c3:#162640;
+  --accent:#38bdf8; --accent-dark:#0284c7; --accent-glow:rgba(56,189,248,.16); --accent-rgb:56,189,248;
+  --gold:#38bdf8; --gd:#0284c7; --glow:rgba(56,189,248,.16);
+}
+body.theme-light{
+  --bg:#f1f5f9; --c1:#ffffff; --c2:#f8fafc; --c3:#e2e8f0;
+  --accent:#f2b830; --accent-dark:#d4950a; --accent-glow:rgba(242,184,48,.2); --accent-rgb:242,184,48;
+  --gold:#d4950a; --gd:#b45309; --glow:rgba(212,149,10,.2);
+  --ink:#1e293b; --ink2:#475569; --ink3:#94a3b8; --br:rgba(0,0,0,.08);
+  --red:#dc2626; --green:#16a34a; --teal:#0d9488;
+}
+
+/* ══ زر الثيم في التوب بار ══ */
+.theme-btn{background:none;border:1px solid var(--br);color:var(--ink3);
+  padding:.3rem .65rem;border-radius:20px;font-size:.72rem;cursor:pointer;
+  font-family:'Tajawal',sans-serif;font-weight:700;transition:all .2s;
+  display:flex;align-items:center;gap:.4rem}
+.theme-btn:hover{border-color:var(--accent);color:var(--accent)}
+
+/* ══ مودال الثيمات ══ */
+.theme-modal{display:none;position:fixed;inset:0;z-index:9999;
+  align-items:flex-end;justify-content:center;
+  background:rgba(0,0,0,.55);backdrop-filter:blur(6px)}
+.theme-modal.open{display:flex}
+.theme-sheet{background:var(--c1);border:1px solid var(--br);
+  border-radius:24px 24px 0 0;padding:1.5rem 1.2rem 2.5rem;
+  width:100%;max-width:460px;animation:slideUp .25s ease}
+@keyframes slideUp{from{transform:translateY(100%)}to{transform:translateY(0)}}
+.theme-sheet-hd{display:flex;justify-content:space-between;align-items:center;margin-bottom:1.2rem}
+.theme-sheet-hd span{font-size:1rem;font-weight:800;color:var(--accent)}
+.theme-close{background:none;border:none;color:var(--ink3);font-size:1.3rem;cursor:pointer;line-height:1}
+.themes-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:.75rem}
+.theme-card{border:2px solid var(--br);border-radius:14px;padding:.9rem .5rem;
+  text-align:center;cursor:pointer;transition:all .2s;background:var(--c2)}
+.theme-card:hover{transform:translateY(-2px);box-shadow:0 8px 24px rgba(0,0,0,.3)}
+.theme-card.active{border-color:var(--accent);box-shadow:0 0 0 3px rgba(var(--accent-rgb),.15)}
+.theme-swatch{width:36px;height:36px;border-radius:50%;margin:0 auto .5rem;
+  display:flex;align-items:center;justify-content:center;font-size:1.1rem}
+.theme-card-name{font-size:.78rem;font-weight:700;color:var(--ink2)}
 *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 body{font-family:'Tajawal',sans-serif;background:var(--bg);color:var(--ink);min-height:100vh;direction:rtl;overflow-x:hidden}
 
@@ -1236,7 +1314,7 @@ body::after{content:'';position:fixed;inset:0;pointer-events:none;z-index:0;
 .auth-form input{width:100%;background:var(--c2);border:1.5px solid var(--br);border-radius:10px;
   color:var(--ink);font-family:'Tajawal',sans-serif;font-size:.92rem;padding:.82rem 1rem;
   margin-bottom:.8rem;outline:none;transition:border-color .2s,box-shadow .2s;direction:rtl;}
-.auth-form input:focus{border-color:rgba(242,184,48,.45);box-shadow:0 0 0 3px rgba(242,184,48,.07)}
+.auth-form input:focus{border-color:rgba(var(--accent-rgb),.45);box-shadow:0 0 0 3px rgba(var(--accent-rgb),.07)}
 .auth-form input::placeholder{color:var(--ink3)}
 
 .branch-row{display:grid;grid-template-columns:1fr 1fr;gap:.7rem;margin-bottom:1rem}
@@ -1269,7 +1347,7 @@ body::after{content:'';position:fixed;inset:0;pointer-events:none;z-index:0;
 input,select{width:100%;background:var(--c2);border:1.5px solid var(--br);border-radius:10px;
   color:var(--ink);font-family:'Tajawal',sans-serif;font-size:.92rem;padding:.82rem 1rem;
   margin-bottom:.7rem;outline:none;transition:border-color .2s,box-shadow .2s;direction:rtl;appearance:none;}
-input:focus,select:focus{border-color:rgba(242,184,48,.45);box-shadow:0 0 0 3px rgba(242,184,48,.07)}
+input:focus,select:focus{border-color:rgba(var(--accent-rgb),.45);box-shadow:0 0 0 3px rgba(var(--accent-rgb),.07)}
 input::placeholder{color:var(--ink3)}
 select option{background:var(--c2)}
 .field-label{font-size:.78rem;color:var(--ink2);font-weight:600;margin-bottom:.35rem;display:block}
@@ -1283,8 +1361,8 @@ select option{background:var(--c2)}
   padding:.88rem 1.4rem;border-radius:11px;border:none;font-family:'Tajawal',sans-serif;
   font-size:.97rem;font-weight:800;cursor:pointer;transition:all .18s;margin-bottom:.5rem;letter-spacing:.15px;}
 .btn:disabled{opacity:.6;cursor:not-allowed}
-.btn-p{background:linear-gradient(135deg,var(--gold),var(--gd));color:#06080f}
-.btn-p:hover:not(:disabled){transform:translateY(-2px);box-shadow:0 8px 24px rgba(242,184,48,.32)}
+.btn-p{background:linear-gradient(135deg,var(--accent),var(--accent-dark));color:#06080f}
+.btn-p:hover:not(:disabled){transform:translateY(-2px);box-shadow:0 8px 24px rgba(var(--accent-rgb),.32)}
 .btn-p:active{transform:none}
 .btn-g{background:var(--c2);color:var(--ink2);border:1.5px solid var(--br);font-size:.88rem}
 .btn-g:hover{border-color:rgba(242,184,48,.3);color:var(--gold)}
@@ -1579,8 +1657,51 @@ select option{background:var(--c2)}
 
 </style>
 
+<style>
+/* ══ البانر الإعلاني المتحرك ══ */
+.ad-banner{
+  width:100%;overflow:hidden;position:relative;z-index:400;
+  background:#07090f;border-bottom:1px solid rgba(var(--accent-rgb),.18);
+}
+
+/* ── شريط الإعلان المتحرك ── */
+.ad-scroll-bar{
+  padding:.52rem 0;background:linear-gradient(90deg,
+    rgba(var(--accent-rgb),.08),rgba(var(--accent-rgb),.14),rgba(var(--accent-rgb),.08));
+  overflow:hidden;cursor:pointer;
+}
+.ad-track{
+  display:flex;align-items:center;gap:0;
+  animation:scrollRTL 22s linear infinite;
+  white-space:nowrap;width:max-content;
+}
+.ad-scroll-bar:hover .ad-track{animation-play-state:paused}
+@keyframes scrollRTL{0%{transform:translateX(0)}100%{transform:translateX(-50%)}}
+.ad-item{
+  display:inline-flex;align-items:center;gap:.5rem;
+  padding:0 2rem;font-size:.75rem;font-weight:700;
+  color:var(--ink2);font-family:'Tajawal',sans-serif;
+}
+.ad-item .hl{color:var(--accent);font-weight:900}
+.ad-sep{color:rgba(var(--accent-rgb),.35);margin:0 .5rem}</style>
+
 </head>
 <body>
+
+<!-- ══ البانر الإعلاني ══ -->
+
+<div class="ad-banner">
+  <div class="ad-scroll-bar" onclick="window.open('https://mizaniq.online','_blank')">
+    <div class="ad-track">
+      <span class="ad-item">🎓 <span class="hl">هو السادس شيحتاج؟</span> اكيد يحتاج ميزان! <span class="ad-sep">✦</span> اشترك الآن على <span class="hl">mizaniq.online</span></span>
+      <span class="ad-item">📚 <span class="hl">أسئلة وزارية · اختبارات يومية · متابعة مستمرة</span> <span class="ad-sep">✦</span> منصة ميزان IQ للسادس الإعدادي</span>
+      <span class="ad-item">🚀 <span class="hl">انضم لآلاف الطلاب</span> اللي يستعدون للوزاري مع ميزان <span class="ad-sep">✦</span> سجّل مجاناً على <span class="hl">mizaniq.online</span></span>
+      <span class="ad-item">🎓 <span class="hl">هو السادس شيحتاج؟</span> اكيد يحتاج ميزان! <span class="ad-sep">✦</span> اشترك الآن على <span class="hl">mizaniq.online</span></span>
+      <span class="ad-item">📚 <span class="hl">أسئلة وزارية · اختبارات يومية · متابعة مستمرة</span> <span class="ad-sep">✦</span> منصة ميزان IQ للسادس الإعدادي</span>
+      <span class="ad-item">🚀 <span class="hl">انضم لآلاف الطلاب</span> اللي يستعدون للوزاري مع ميزان <span class="ad-sep">✦</span> سجّل مجاناً على <span class="hl">mizaniq.online</span></span>
+    </div>
+  </div>
+</div>
 
 <header class="topbar">
   <div class="brand">
@@ -1591,11 +1712,49 @@ select option{background:var(--c2)}
     </div>
   </div>
   <div style="display:flex;align-items:center;gap:.5rem">
+    <button class="theme-btn" onclick="openThemeModal()" title="تغيير الثيم">🎨</button>
     <div class="top-pill" id="top-user-info" style="display:none">مسجّل</div>
     <button class="top-logout" id="logout-btn" onclick="doLogout()" style="display:none">خروج</button>
     <div class="top-pill" id="top-pill-alt">Squads · السادس</div>
   </div>
 </header>
+
+<!-- ══ مودال الثيمات ══ -->
+
+<div class="theme-modal" id="theme-modal" onclick="closeThemeModal(event)">
+  <div class="theme-sheet">
+    <div class="theme-sheet-hd">
+      <span>🎨 اختر ثيمك</span>
+      <button class="theme-close" onclick="document.getElementById('theme-modal').classList.remove('open')">✕</button>
+    </div>
+    <div class="themes-grid">
+      <div class="theme-card" id="tc-gold" onclick="applyTheme('gold')">
+        <div class="theme-swatch" style="background:linear-gradient(135deg,#f2b830,#d4950a)">✨</div>
+        <div class="theme-card-name">ذهبي</div>
+      </div>
+      <div class="theme-card" id="tc-purple" onclick="applyTheme('purple')">
+        <div class="theme-swatch" style="background:linear-gradient(135deg,#a78bfa,#7c3aed)">💜</div>
+        <div class="theme-card-name">بنفسجي</div>
+      </div>
+      <div class="theme-card" id="tc-emerald" onclick="applyTheme('emerald')">
+        <div class="theme-swatch" style="background:linear-gradient(135deg,#34d399,#059669)">💚</div>
+        <div class="theme-card-name">زمردي</div>
+      </div>
+      <div class="theme-card" id="tc-rose" onclick="applyTheme('rose')">
+        <div class="theme-swatch" style="background:linear-gradient(135deg,#fb7185,#e11d48)">🌸</div>
+        <div class="theme-card-name">وردي</div>
+      </div>
+      <div class="theme-card" id="tc-sky" onclick="applyTheme('sky')">
+        <div class="theme-swatch" style="background:linear-gradient(135deg,#38bdf8,#0284c7)">💙</div>
+        <div class="theme-card-name">سماوي</div>
+      </div>
+      <div class="theme-card" id="tc-light" onclick="applyTheme('light')">
+        <div class="theme-swatch" style="background:linear-gradient(135deg,#f8fafc,#e2e8f0);border:1px solid #cbd5e1">☀️</div>
+        <div class="theme-card-name">فاتح</div>
+      </div>
+    </div>
+  </div>
+</div>
 
 <div class="wrap">
 
@@ -1608,7 +1767,6 @@ select option{background:var(--c2)}
       <div class="auth-title">ميزان Squads</div>
       <p class="auth-sub">ادرس مع فريقك · تنافس مع الجميع</p>
     </div>
-
 
 <div id="auth-login" class="auth-form">
   <h3>🔓 تسجيل الدخول</h3>
@@ -1641,7 +1799,6 @@ select option{background:var(--c2)}
   <button id="signup-google-btn" class="btn" onclick="doGoogleSignup()" style="background:rgba(59,130,246,.12);border:1.5px solid rgba(59,130,246,.3);color:var(--blue);margin-bottom:.5rem">🔵 تسجيل بجوجل</button>
   <div class="auth-switch">هل لديك حساب بالفعل؟ <a onclick="switchAuth('login')">← دخول</a></div>
 </div>
-
 
   </div>
 </div>
@@ -1680,7 +1837,6 @@ select option{background:var(--c2)}
     <button class="btn btn-t" onclick="toggleForm('j')">🔗 انضم بكود دعوة</button>
     <button class="btn btn-g" onclick="toggleForm('av')">🌐 تصفح الفرق المتاحة</button>
 
-
 <div id="form-c" class="form-block" style="display:none">
   <div class="form-ttl">🛡️ إنشاء فريق جديد</div>
   <input id="c-name" type="text" placeholder="اسم فريقك (مثل: ليوث ميزان)" maxlength="22" autocomplete="off"/>
@@ -1700,7 +1856,6 @@ select option{background:var(--c2)}
   <div class="form-ttl">🌐 فرق متاحة للانضمام</div>
   <div id="available-squads-wrap"></div>
 </div>
-
 
   </div>
 </div>
@@ -1747,65 +1902,66 @@ select option{background:var(--c2)}
 
   <div id="panel-study" style="display:none">
 
-    <!-- study mode switcher -->
-    <div class="study-mode-row">
-      <button class="smode-btn on" id="smode-normal" onclick="switchStudyMode('normal')">⏱ عداد حر</button>
-      <button class="smode-btn"   id="smode-pomo"   onclick="switchStudyMode('pomo')">🍅 بومودورو</button>
-    </div>
+```
+<!-- study mode switcher -->
+<div class="study-mode-row">
+  <button class="smode-btn on" id="smode-normal" onclick="switchStudyMode('normal')">⏱ عداد حر</button>
+  <button class="smode-btn"   id="smode-pomo"   onclick="switchStudyMode('pomo')">🍅 بومودورو</button>
+</div>
 
-    <!-- POMODORO PANEL -->
-    <div id="pomo-panel" style="display:none">
-      <div class="card">
-        <div class="sec-ttl">🍅 بومودورو</div>
-        <div class="pomo-ring-wrap">
-          <svg class="pomo-ring" viewBox="0 0 120 120">
-            <circle class="pomo-track" cx="60" cy="60" r="52"/>
-            <circle class="pomo-fill"  cx="60" cy="60" r="52" id="pomo-arc"/>
-          </svg>
-          <div class="pomo-center">
-            <div class="pomo-phase-icon" id="pomo-phase-icon">🍅</div>
-            <div class="pomo-time"       id="pomo-clock">25:00</div>
-            <div class="pomo-phase-lbl"  id="pomo-phase-lbl">دراسة</div>
-          </div>
-        </div>
-        <div class="pomo-rounds" id="pomo-rounds-row"></div>
-        <div class="pomo-controls">
-          <button class="pomo-btn pomo-reset" onclick="pomoReset()" title="إعادة">↺</button>
-          <button class="pomo-btn pomo-main"  id="pomo-main-btn" onclick="pomoToggle()">▶</button>
-          <button class="pomo-btn pomo-skip"  onclick="pomoSkip()" title="تخطي">⏭</button>
-        </div>
-        <div class="pomo-settings">
-          <div class="pomo-set-row">
-            <span class="pomo-set-lbl">🍅 دراسة</span>
-            <div class="pomo-set-ctrl">
-              <button onclick="pomoAdjust('work',-5)">−</button>
-              <span id="pomo-work-val">25</span>
-              <button onclick="pomoAdjust('work',5)">+</button>
-            </div>
-            <span class="pomo-set-unit">دقيقة</span>
-          </div>
-          <div class="pomo-set-row">
-            <span class="pomo-set-lbl">☕ استراحة</span>
-            <div class="pomo-set-ctrl">
-              <button onclick="pomoAdjust('break',-5)">−</button>
-              <span id="pomo-break-val">5</span>
-              <button onclick="pomoAdjust('break',5)">+</button>
-            </div>
-            <span class="pomo-set-unit">دقيقة</span>
-          </div>
-        </div>
-        <div class="pts-rule">كل جولة بومودورو مكتملة = نقاط تُحتسب تلقائياً ⚡</div>
+<!-- POMODORO PANEL -->
+<div id="pomo-panel" style="display:none">
+  <div class="card">
+    <div class="sec-ttl">🍅 بومودورو</div>
+    <div class="pomo-ring-wrap">
+      <svg class="pomo-ring" viewBox="0 0 120 120">
+        <circle class="pomo-track" cx="60" cy="60" r="52"/>
+        <circle class="pomo-fill"  cx="60" cy="60" r="52" id="pomo-arc"/>
+      </svg>
+      <div class="pomo-center">
+        <div class="pomo-phase-icon" id="pomo-phase-icon">🍅</div>
+        <div class="pomo-time"       id="pomo-clock">25:00</div>
+        <div class="pomo-phase-lbl"  id="pomo-phase-lbl">دراسة</div>
       </div>
     </div>
+    <div class="pomo-rounds" id="pomo-rounds-row"></div>
+    <div class="pomo-controls">
+      <button class="pomo-btn pomo-reset" onclick="pomoReset()" title="إعادة">↺</button>
+      <button class="pomo-btn pomo-main"  id="pomo-main-btn" onclick="pomoToggle()">▶</button>
+      <button class="pomo-btn pomo-skip"  onclick="pomoSkip()" title="تخطي">⏭</button>
+    </div>
+    <div class="pomo-settings">
+      <div class="pomo-set-row">
+        <span class="pomo-set-lbl">🍅 دراسة</span>
+        <div class="pomo-set-ctrl">
+          <button onclick="pomoAdjust('work',-5)">−</button>
+          <span id="pomo-work-val">25</span>
+          <button onclick="pomoAdjust('work',5)">+</button>
+        </div>
+        <span class="pomo-set-unit">دقيقة</span>
+      </div>
+      <div class="pomo-set-row">
+        <span class="pomo-set-lbl">☕ استراحة</span>
+        <div class="pomo-set-ctrl">
+          <button onclick="pomoAdjust('break',-5)">−</button>
+          <span id="pomo-break-val">5</span>
+          <button onclick="pomoAdjust('break',5)">+</button>
+        </div>
+        <span class="pomo-set-unit">دقيقة</span>
+      </div>
+    </div>
+    <div class="pts-rule">كل جولة بومودورو مكتملة = نقاط تُحتسب تلقائياً ⚡</div>
+  </div>
+</div>
 
-    <!-- NORMAL STUDY PANEL -->
-    <div id="normal-panel">
-    <div class="card">
-      <div class="sec-ttl">📚 جلسة الدراسة</div>
-      <button class="btn btn-p" onclick="openSessionModal()" style="margin-bottom:1rem">⏱ ابدأ جلسة مخطط لها</button>
-      <span class="field-label">المادة الحالية</span>
-      <select id="subj-sel"></select>
-
+<!-- NORMAL STUDY PANEL -->
+<div id="normal-panel">
+<div class="card">
+  <div class="sec-ttl">📚 جلسة الدراسة</div>
+  <button class="btn btn-p" onclick="openSessionModal()" style="margin-bottom:1rem">⏱ ابدأ جلسة مخطط لها</button>
+  <span class="field-label">المادة الحالية</span>
+  <select id="subj-sel"></select>
+```
 
   <div id="session-info">
     <div class="session-stat">
@@ -1937,6 +2093,41 @@ window.pickSignupBranch = function(b){
 };
 pickBranch('علمي');
 pickSignupBranch('علمي');
+
+// ══ نظام الثيمات ══
+const THEMES = ['gold','purple','emerald','rose','sky','light'];
+
+function applyTheme(theme) {
+  // نزيل كل الثيمات القديمة
+  document.body.classList.remove(...THEMES.map(t => 'theme-'+t));
+  if (theme !== 'gold') document.body.classList.add('theme-'+theme);
+  // نحفظ اختيار الطالب
+  localStorage.setItem('mizan_theme', theme);
+  // نحدث الـ active state في الكاردات
+  THEMES.forEach(t => {
+    const el = document.getElementById('tc-'+t);
+    if (el) el.classList.toggle('active', t === theme);
+  });
+  // نغلق المودال بعد الاختيار
+  setTimeout(() => document.getElementById('theme-modal').classList.remove('open'), 300);
+}
+
+window.openThemeModal = () => {
+  document.getElementById('theme-modal').classList.add('open');
+};
+window.closeThemeModal = (e) => {
+  if (e.target === document.getElementById('theme-modal')) {
+    document.getElementById('theme-modal').classList.remove('open');
+  }
+};
+
+// تحميل الثيم المحفوظ عند فتح الصفحة
+(function loadSavedTheme() {
+  const saved = localStorage.getItem('mizan_theme') || 'gold';
+  applyTheme(saved);
+})();
+
+
 </script>
 
 </body>
