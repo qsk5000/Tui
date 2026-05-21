@@ -651,12 +651,24 @@ document.addEventListener('visibilitychange', () => {
       if (bgTs) {
         const absenceSeconds = Math.floor((Date.now() - parseInt(bgTs)) / 1000);
         if (absenceSeconds > 0 && absenceSeconds < 43200) {
-          // نوقف الـ interval القديم ونبدأ جديد بالثواني المحدّثة
+          // ← الإصلاح: نكمل بنفس الـ sessionId بدون ما نعيد startStudy
+          // هذا يمنع تسجيل جلسة مكررة عند الرجوع من الخلفية
           clearInterval(studyTick);
           studySec += absenceSeconds;
           localStorage.removeItem('mizan_study_bg_ts');
-          studyActive = false; // نعيد startStudy من صفر لتجديد segmentStart
-          startStudy();
+          const segmentStart2 = Date.now();
+          const secAtStart2   = studySec;
+          studyTick = setInterval(() => {
+            const elapsed2 = Math.floor((Date.now() - segmentStart2) / 1000);
+            studySec = secAtStart2 + elapsed2;
+            renderClock();
+            if (sessionMode) updateSessionInfo();
+            if (studySec >= 10800 && !threeHourWarned) {
+              threeHourWarned = true;
+              toast('⚠️ درست 3 ساعات! خذ استراحة 15 دقيقة للحفاظ على تركيزك 🧠','warn');
+            }
+            saveStudyState();
+          }, 1000);
         }
       }
     }
@@ -727,7 +739,51 @@ function completeSession() {
   toast('أحسنت! اكملت الجلسة! 🎉','ok');
 }
 
-window.toggleStudy  = () => { if (isSaving) return; studyActive ? stopStudy() : startStudy(); };
+let currentMood = null; // يحفظ مزاج الجلسة الحالية
+
+const MOOD_DATA = {
+  '😴': { label: 'تعبان',   msg: 'حتى لو تعبان، 30 دقيقة تفرق! جسمك يتكيف مع الدراسة بسرعة 💪',        color: '#60a5fa' },
+  '😐': { label: 'عادي',    msg: 'المزاج العادي أفضل وقت للمراجعة — ما عندك تشتت 📖',                   color: '#fbbf24' },
+  '😊': { label: 'زين',     msg: 'مزاجك زين = جلسة ذهب! استغل هذا الوقت للمواد الصعبة 🔥',             color: '#4ade80' },
+  '🔥': { label: 'متحمس',   msg: 'هذه الطاقة نادرة يا بطل — اشتغل على أصعب موضوع عندك الآن! 🚀',      color: '#f97316' },
+  '😤': { label: 'ضاغط',    msg: 'الضغط يصير، خذ نفس عميق وابدأ بخطوة صغيرة — انت تقدر ⭐',           color: '#c084fc' }
+};
+
+window.openMoodCheck = () => {
+  // إذا جلسة شغالة، أوقفها مباشرة
+  if (studyActive) { stopStudy(); return; }
+  if (isSaving) return;
+  G('mood-modal').classList.add('open');
+};
+
+window.closeMoodModal = (e) => {
+  if (!e || e.target === G('mood-modal')) {
+    G('mood-modal').classList.remove('open');
+  }
+};
+
+window.selectMood = (mood) => {
+  currentMood = mood;
+  // نحدث الـ UI — نبرز الاختيار
+  document.querySelectorAll('.mood-btn').forEach(b => {
+    b.classList.toggle('selected', b.dataset.mood === mood);
+  });
+  const data = MOOD_DATA[mood];
+  const msgEl = G('mood-msg');
+  if (msgEl) {
+    msgEl.textContent = data.msg;
+    msgEl.style.color = data.color;
+    msgEl.style.display = 'block';
+  }
+};
+
+window.confirmMoodAndStart = () => {
+  G('mood-modal').classList.remove('open');
+  // نحفظ المزاج في localStorage لنضيفه للجلسة
+  if (currentMood) localStorage.setItem('mizan_session_mood', currentMood);
+  startStudy();
+};
+window.toggleStudy  = () => { studyActive ? stopStudy() : openMoodCheck(); };
 window.pauseResume  = () => { studyActive ? pauseStudy() : resumeStudy(); };
 
 function startStudy() {
@@ -832,7 +888,9 @@ async function stopStudy() {
   renderClock();
 
   const pending = JSON.parse(localStorage.getItem('mizan_pending_pts') || '[]');
-  pending.push({ pts, secs, subj, uid, squadId, ts: Date.now(), sessionId: currentSessionId });
+  const sessionMood = localStorage.getItem('mizan_session_mood') || null;
+  localStorage.removeItem('mizan_session_mood');
+  pending.push({ pts, secs, subj, uid, squadId, ts: Date.now(), sessionId: currentSessionId, mood: sessionMood });
   localStorage.setItem('mizan_pending_pts', JSON.stringify(pending));
   currentSessionId = null;
 
@@ -868,7 +926,7 @@ async function flushPendingPts() {
       await setDoc(sessionRef, {
         uid: entry.uid, squadId: entry.squadId, subject: entry.subj,
         seconds: entry.secs, pts: entry.pts, ts: serverTimestamp(),
-        sessionMode, sessionTarget,
+        sessionMode, sessionTarget, mood: entry.mood || null,
         date: new Date().toISOString().slice(0,10)
       });
     }
@@ -1903,7 +1961,51 @@ select option{background:var(--c2)}
   color:var(--ink2);font-family:'Tajawal',sans-serif;
 }
 .ad-item .hl{color:var(--accent);font-weight:900}
-.ad-sep{color:rgba(var(--accent-rgb),.35);margin:0 .5rem}</style>
+.ad-sep{color:rgba(var(--accent-rgb),.35);margin:0 .5rem}
+
+/* ══ مودال المزاج ══ */
+.mood-modal-overlay{
+  position:fixed;inset:0;z-index:999;
+  background:rgba(0,0,0,.7);backdrop-filter:blur(6px);
+  display:flex;align-items:flex-end;justify-content:center;
+  opacity:0;pointer-events:none;transition:opacity .25s;
+}
+.mood-modal-overlay.open{opacity:1;pointer-events:all;}
+.mood-modal-box{
+  background:var(--c1);border:1px solid var(--br);
+  border-radius:var(--r) var(--r) 0 0;
+  padding:1.4rem 1.2rem 2rem;width:100%;max-width:480px;
+  transform:translateY(30px);transition:transform .3s ease;
+}
+.mood-modal-overlay.open .mood-modal-box{transform:translateY(0);}
+.mood-modal-hd{
+  display:flex;justify-content:space-between;align-items:center;
+  font-weight:700;font-size:1rem;color:var(--ink);margin-bottom:.3rem;
+}
+.mood-subtitle{font-size:.8rem;color:var(--ink3);margin-bottom:1rem;text-align:center;}
+.mood-btns-row{
+  display:flex;gap:.5rem;justify-content:center;margin-bottom:.8rem;flex-wrap:wrap;
+}
+.mood-btn{
+  display:flex;flex-direction:column;align-items:center;gap:.25rem;
+  background:var(--c2);border:2px solid var(--br);border-radius:12px;
+  padding:.7rem .6rem;cursor:pointer;transition:all .2s;min-width:56px;
+}
+.mood-btn:hover{border-color:var(--accent);transform:translateY(-2px);}
+.mood-btn.selected{
+  border-color:var(--accent);background:rgba(var(--accent-rgb),.12);
+  transform:translateY(-3px);box-shadow:0 4px 16px rgba(var(--accent-rgb),.2);
+}
+.mood-emoji{font-size:1.6rem;line-height:1;}
+.mood-lbl{font-size:.7rem;color:var(--ink2);font-family:'Tajawal',sans-serif;font-weight:600;}
+.mood-btn.selected .mood-lbl{color:var(--accent);}
+.mood-msg{
+  font-size:.82rem;font-weight:600;text-align:center;
+  padding:.7rem 1rem;background:var(--c2);border-radius:10px;
+  margin-bottom:.3rem;line-height:1.5;
+  animation:fadeIn .3s ease;
+}
+@keyframes fadeIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}</style>
 
 </head>
 <body>
@@ -2411,6 +2513,42 @@ select option{background:var(--c2)}
 </div>
 
 </div><!-- end .wrap -->
+
+<!-- MODAL: MOOD CHECK -->
+<div id="mood-modal" class="mood-modal-overlay" onclick="closeMoodModal(event)">
+  <div class="mood-modal-box">
+    <div class="mood-modal-hd">
+      <span>كيف مزاجك اليوم؟ 🌟</span>
+      <button class="modal-close" onclick="closeMoodModal()">✕</button>
+    </div>
+    <div class="mood-subtitle">اختر حالتك قبل ما تبدأ الجلسة</div>
+    <div class="mood-btns-row">
+      <button class="mood-btn" data-mood="😴" onclick="selectMood('😴')">
+        <span class="mood-emoji">😴</span>
+        <span class="mood-lbl">تعبان</span>
+      </button>
+      <button class="mood-btn" data-mood="😐" onclick="selectMood('😐')">
+        <span class="mood-emoji">😐</span>
+        <span class="mood-lbl">عادي</span>
+      </button>
+      <button class="mood-btn" data-mood="😊" onclick="selectMood('😊')">
+        <span class="mood-emoji">😊</span>
+        <span class="mood-lbl">زين</span>
+      </button>
+      <button class="mood-btn" data-mood="🔥" onclick="selectMood('🔥')">
+        <span class="mood-emoji">🔥</span>
+        <span class="mood-lbl">متحمس</span>
+      </button>
+      <button class="mood-btn" data-mood="😤" onclick="selectMood('😤')">
+        <span class="mood-emoji">😤</span>
+        <span class="mood-lbl">ضاغط</span>
+      </button>
+    </div>
+    <div id="mood-msg" class="mood-msg" style="display:none"></div>
+    <button class="btn btn-p" onclick="confirmMoodAndStart()" style="margin-top:.8rem">🚀 ابدأ الجلسة</button>
+    <button class="btn" onclick="closeMoodModal()" style="margin-top:.4rem;background:transparent;color:var(--ink2);font-size:.82rem;padding:.5rem">تخطي</button>
+  </div>
+</div>
 
 <!-- MODAL: SESSION -->
 
