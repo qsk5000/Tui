@@ -963,7 +963,7 @@ window.switchRankTab = tab => {
   if (tab === 'solo' && typeof loadSoloLeaderboard === 'function') loadSoloLeaderboard();
 };
 window.switchTab = tab => {
-  ['team','study','rank','challenges','stats','boss'].forEach(t => {
+  ['team','study','rank','challenges','stats'].forEach(t => {
     const panel = G('panel-'+t);
     const tabEl = G('tab-'+t);
     if (panel) panel.style.display = t===tab ? 'block' : 'none';
@@ -971,7 +971,6 @@ window.switchTab = tab => {
   });
   if (tab === 'challenges') renderGoals();
   if (tab === 'stats') loadStats('today');
-  if (tab === 'boss') loadBoss();
 };
 window.toggleForm = w => {
   const c=G('form-c'), j=G('form-j'), av=G('form-av');
@@ -1410,142 +1409,7 @@ async function loadStats(period) {
   }
 }
 
-// ══ نظام البوس — التسخيت 💀 ══
-const BOSS_TARGET_HOURS = 10; // هدف الفريق اليومي
-const BOSS_TARGET_SECS  = BOSS_TARGET_HOURS * 3600;
-
-async function loadBoss() {
-  const wrap = G('boss-wrap');
-  if (!wrap) return;
-  wrap.innerHTML = '<div style="text-align:center;color:var(--ink3);padding:2rem">⏳ جاري تحميل البوس...</div>';
-
-  try {
-    const today = new Date().toISOString().slice(0,10);
-
-    // جيب جلسات الفريق اليوم
-    const sqSnap = await getDoc(doc(db,'squads',squadId));
-    if (!sqSnap.exists()) return;
-    const sq = sqSnap.data();
-
-    const sessSnap = await getDocs(
-      query(collection(db,'sessions'),
-        where('squadId','==',squadId),
-        where('date','==',today))
-    );
-
-    let todaySecs = 0;
-    const memberSecs = {};
-    sessSnap.forEach(d => {
-      const s = d.data();
-      todaySecs += s.seconds || 0;
-      memberSecs[s.uid] = (memberSecs[s.uid]||0) + (s.seconds||0);
-    });
-
-    const pct     = Math.min(100, Math.round(todaySecs / BOSS_TARGET_SECS * 100));
-    const beaten  = pct >= 100;
-    const bossHp  = Math.max(0, 100 - pct);
-
-    // جلب أسماء الأعضاء
-    const memberNames = {};
-    for (const mid of sq.members) {
-      const us = await getDoc(doc(db,'users',mid));
-      if (us.exists()) memberNames[mid] = us.data().name;
-    }
-
-    wrap.innerHTML = `
-      <div class="boss-card ${beaten ? 'beaten' : ''}">
-        <div class="boss-header">
-          <div class="boss-title">${beaten ? '💀 تم هزيم التسخيت!' : '💀 بوس اليوم'}</div>
-          <div class="boss-subtitle">${beaten ? 'الفريق كسر التسخيت اليوم! 🏆' : 'هزّ الفريق قبل منتصف الليل!'}</div>
-        </div>
-
-        <div class="boss-body">
-          <div class="boss-emoji">${beaten ? '😵' : bossHp > 50 ? '😈' : '😰'}</div>
-          <div class="boss-name">التسخيت</div>
-          <div class="boss-hp-wrap">
-            <div class="boss-hp-label">
-              <span>❤️ صحة البوس</span>
-              <span>${bossHp}%</span>
-            </div>
-            <div class="boss-hp-bar">
-              <div class="boss-hp-fill ${bossHp < 30 ? 'low' : ''}" style="width:${bossHp}%"></div>
-            </div>
-          </div>
-
-          <div class="boss-dmg-wrap">
-            <div class="boss-hp-label">
-              <span>⚔️ ضرر الفريق</span>
-              <span>${pct}%</span>
-            </div>
-            <div class="boss-hp-bar">
-              <div class="boss-dmg-fill" style="width:${pct}%"></div>
-            </div>
-          </div>
-
-          <div class="boss-stats-row">
-            <div class="boss-stat">
-              <div class="boss-stat-val">${fmtH(todaySecs)}</div>
-              <div class="boss-stat-lbl">درس الفريق</div>
-            </div>
-            <div class="boss-stat">
-              <div class="boss-stat-val">${BOSS_TARGET_HOURS}س</div>
-              <div class="boss-stat-lbl">المطلوب</div>
-            </div>
-            <div class="boss-stat">
-              <div class="boss-stat-val">${fmtH(Math.max(0, BOSS_TARGET_SECS - todaySecs))}</div>
-              <div class="boss-stat-lbl">المتبقي</div>
-            </div>
-          </div>
-        </div>
-
-        ${beaten ? `
-          <div class="boss-victory">
-            🎉 أحسنتم! الفريق هزم التسخيت اليوم
-            <br>كل عضو درس يحصل مكافأة نقاط! ⚡
-          </div>` : `
-          <div class="boss-warning">
-            ⚠️ لو ما هزمتوه قبل منتصف الليل — البوس يهاجم الفريق 💀
-          </div>`
-        }
-
-        <div class="boss-members">
-          <div class="boss-members-title">⚔️ ضربات الأعضاء اليوم</div>
-          ${sq.members.map(mid => {
-            const secs = memberSecs[mid] || 0;
-            const mpct = Math.min(100, Math.round(secs / (BOSS_TARGET_SECS/sq.members.length) * 100));
-            const name = memberNames[mid] || 'طالب';
-            const isMe = mid === uid;
-            return `<div class="boss-member ${isMe?'me':''}">
-              <div class="boss-member-av">${name[0]}</div>
-              <div class="boss-member-body">
-                <div class="boss-member-name">${name}${isMe?' (أنت)':''}</div>
-                <div class="boss-member-bar-wrap">
-                  <div class="boss-member-bar" style="width:${mpct}%"></div>
-                </div>
-              </div>
-              <div class="boss-member-time">${secs > 0 ? fmtH(secs) : '😴'}</div>
-            </div>`;
-          }).join('')}
-        </div>
-
-        <button class="btn btn-study" onclick="switchTab('study')" style="margin-top:1rem">
-          ⚔️ ${beaten ? 'درّس أكثر وقوّي الفريق' : 'هجوم على البوس! ابدأ الدراسة'}
-        </button>
-      </div>`;
-
-  } catch(e) {
-    console.error(e);
-    wrap.innerHTML = '<div style="text-align:center;color:var(--red);padding:2rem">خطأ في تحميل البوس ❌</div>';
-  }
-}
-
-// تحديث البوس تلقائياً كل دقيقة لو التاب مفتوح
-setInterval(() => {
-  const bossPanel = G('panel-boss');
-  if (bossPanel && bossPanel.style.display !== 'none') loadBoss();
-}, 60000);
-
-
+function goScreen(id) {
   ['s-auth','s-register','s-lobby','s-squad'].forEach(s => {
     const el = G(s); if(el) el.style.display='none';
   });
@@ -1648,24 +1512,27 @@ body::after{content:'';position:fixed;inset:0;pointer-events:none;z-index:0;
   background-size:56px 56px;}
 
 .topbar{position:sticky;top:0;z-index:300;display:flex;align-items:center;justify-content:space-between;
-  padding:.85rem 1.3rem;background:rgba(6,8,15,.84);backdrop-filter:blur(24px) saturate(180%);border-bottom:1px solid var(--br);}
-.brand{display:flex;align-items:center;gap:.65rem}
-.brand-logo{width:36px;height:36px;border-radius:10px;background:linear-gradient(135deg,var(--gold),var(--gd));
-  display:flex;align-items:center;justify-content:center;font-size:1.1rem;font-weight:900;color:#06080f;
-  box-shadow:0 0 18px var(--glow);flex-shrink:0;}
-.brand-name{font-size:1.07rem;font-weight:900;letter-spacing:-.3px;
+  padding:.6rem .9rem;background:rgba(6,8,15,.9);backdrop-filter:blur(24px) saturate(180%);border-bottom:1px solid var(--br);
+  gap:.4rem;min-width:0;}
+.brand{display:flex;align-items:center;gap:.5rem;flex-shrink:0;min-width:0;}
+.brand-logo{width:32px;height:32px;min-width:32px;border-radius:9px;background:linear-gradient(135deg,var(--gold),var(--gd));
+  display:flex;align-items:center;justify-content:center;font-size:1rem;font-weight:900;color:#06080f;
+  box-shadow:0 0 14px var(--glow);flex-shrink:0;}
+.brand-name{font-size:.97rem;font-weight:900;letter-spacing:-.3px;
   background:linear-gradient(135deg,var(--gold) 40%,#fff);-webkit-background-clip:text;-webkit-text-fill-color:transparent;}
-.brand-tag{font-size:.63rem;color:var(--ink3);font-weight:500;margin-top:.1rem}
-.top-pill{font-size:.68rem;color:var(--ink3);background:var(--c1);border:1px solid var(--br);
-  padding:.25rem .75rem;border-radius:20px;font-family:'IBM Plex Mono',monospace;white-space:nowrap;max-width:180px;overflow:hidden;text-overflow:ellipsis;}
-.top-logout{background:none;border:none;color:var(--ink3);font-size:.72rem;cursor:pointer;
-  padding:.4rem .8rem;border-radius:6px;transition:all .2s;font-family:'Tajawal',sans-serif;font-weight:700;
-  display:flex;align-items:center;gap:.3rem}
+.brand-tag{font-size:.58rem;color:var(--ink3);font-weight:500;margin-top:.05rem;display:none;}
+@media(min-width:380px){.brand-tag{display:block}}
+.top-pill{font-size:.62rem;color:var(--ink3);background:var(--c1);border:1px solid var(--br);
+  padding:.2rem .55rem;border-radius:20px;font-family:'IBM Plex Mono',monospace;
+  white-space:nowrap;max-width:110px;overflow:hidden;text-overflow:ellipsis;flex-shrink:1;}
+.top-logout{background:none;border:none;color:var(--ink3);font-size:.7rem;cursor:pointer;
+  padding:.35rem .6rem;border-radius:6px;transition:all .2s;font-family:'Tajawal',sans-serif;font-weight:700;
+  display:flex;align-items:center;gap:.25rem;flex-shrink:0;white-space:nowrap;}
 .top-logout:hover{color:var(--red);background:rgba(248,113,113,.1)}
 
-.wrap{position:relative;z-index:1;max-width:460px;margin:0 auto;padding:1.4rem 1rem 6rem}
+.wrap{position:relative;z-index:1;max-width:460px;margin:0 auto;padding:1rem .75rem 6rem}
 
-#s-auth{min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center}
+#s-auth{min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:1rem}
 .auth-container{width:100%;max-width:380px}
 .auth-hero{text-align:center;margin-bottom:2rem;animation:fadeUp .5s ease both}
 .auth-icon{font-size:3.2rem;display:block;margin-bottom:.8rem;animation:float 3.5s ease-in-out infinite}
@@ -1771,12 +1638,12 @@ select option{background:var(--c2)}
 .sl{font-size:.67rem;color:var(--ink3);font-weight:500}
 .sbox.tc .sv{color:var(--teal)} .sbox.bc .sv{color:var(--blue)} .sbox.gc .sv{color:var(--green)}
 
-.tabs{display:grid;gap:.3rem;background:var(--c1);
-  border:1px solid var(--br);border-radius:14px;padding:.35rem;margin-bottom:.9rem}
-.tab{padding:.55rem .2rem;border-radius:10px;text-align:center;font-size:.62rem;font-weight:700;
+.tabs{display:grid;grid-template-columns:repeat(5,1fr);gap:.25rem;background:var(--c1);
+  border:1px solid var(--br);border-radius:14px;padding:.3rem;margin-bottom:.9rem}
+.tab{padding:.5rem .15rem;border-radius:10px;text-align:center;font-size:.58rem;font-weight:700;
   cursor:pointer;transition:all .2s;color:var(--ink3);border:none;background:none;
-  font-family:'Tajawal',sans-serif;display:flex;flex-direction:column;align-items:center;gap:.28rem;line-height:1}
-.tab svg{width:17px;height:17px;transition:all .2s;flex-shrink:0}
+  font-family:'Tajawal',sans-serif;display:flex;flex-direction:column;align-items:center;gap:.22rem;line-height:1}
+.tab svg{width:16px;height:16px;transition:all .2s;flex-shrink:0}
 .tab.on{background:var(--c2);color:var(--gold);box-shadow:0 2px 10px rgba(0,0,0,.3)}
 .tab.on svg{stroke:var(--gold)}
 
@@ -1906,8 +1773,8 @@ select option{background:var(--c2)}
 .timer-label-top{font-size:.72rem;font-weight:700;color:var(--gold);letter-spacing:.8px;
   text-transform:uppercase;opacity:.8;font-family:'Tajawal',sans-serif}
 .timer-label-bot{font-size:.65rem;color:var(--ink3);letter-spacing:.5px;font-family:'Tajawal',sans-serif}
-#clock{font-family:'IBM Plex Mono',monospace;font-size:2.8rem;font-weight:600;color:var(--gold);
-  letter-spacing:6px;text-shadow:0 0 28px rgba(242,184,48,.5),0 0 60px rgba(242,184,48,.15);
+#clock{font-family:'IBM Plex Mono',monospace;font-size:clamp(2rem,8vw,2.8rem);font-weight:600;color:var(--gold);
+  letter-spacing:4px;text-shadow:0 0 28px rgba(242,184,48,.5),0 0 60px rgba(242,184,48,.15);
   position:relative;z-index:1;line-height:1.1}
 .timer-controls{display:flex;align-items:center;justify-content:center;gap:.8rem;position:relative;z-index:1}
 .timer-pause-btn{width:48px;height:48px;border-radius:50%;border:2px solid rgba(242,184,48,.35);
@@ -1970,14 +1837,17 @@ select option{background:var(--c2)}
 
 @media(max-width:380px){
   .h-title{font-size:1.7rem} .sq-big{font-size:1.4rem}
-  #clock{font-size:2rem;letter-spacing:3px} .sv{font-size:1.3rem}
+  #clock{font-size:2.2rem;letter-spacing:3px} .sv{font-size:1.3rem}
   .auth-title{font-size:1.5rem}
-  .tabs{grid-template-columns:repeat(6,1fr)}
-  .tab{font-size:.5rem;padding:.4rem .05rem}
-  .tab svg{width:13px;height:13px}
+  .tabs{grid-template-columns:repeat(5,1fr)}
+  .tab{font-size:.53rem;padding:.45rem .1rem}
+  .tab svg{width:14px;height:14px}
   .chal-teams{font-size:.7rem}
+  .s4{grid-template-columns:1fr 1fr}
+  .stats-grid{grid-template-columns:1fr 1fr}
   .wrap{padding:.8rem .6rem 6rem}
   .card{padding:1rem}
+  .sq-hero{padding:1.2rem 1rem}
 }
 
 .study-mode-row{display:grid;grid-template-columns:1fr 1fr;gap:.5rem;margin-bottom:.9rem}
@@ -2075,62 +1945,7 @@ select option{background:var(--c2)}
 </style>
 
 <style>
-/* ══ نظام البوس ══ */
-.boss-card{background:var(--c1);border:1px solid rgba(248,113,113,.25);border-radius:var(--r);
-  padding:1.4rem;margin-bottom:.9rem;animation:fadeUp .4s ease both;
-  box-shadow:0 0 40px rgba(248,113,113,.06)}
-.boss-card.beaten{border-color:rgba(74,222,128,.3);box-shadow:0 0 40px rgba(74,222,128,.08)}
-.boss-header{text-align:center;margin-bottom:1.2rem}
-.boss-title{font-size:1rem;font-weight:900;color:var(--red);margin-bottom:.2rem}
-.boss-card.beaten .boss-title{color:var(--green)}
-.boss-subtitle{font-size:.78rem;color:var(--ink3)}
-.boss-body{display:flex;flex-direction:column;align-items:center;gap:.9rem}
-.boss-emoji{font-size:4rem;line-height:1;animation:bossFloat 2.5s ease-in-out infinite}
-@keyframes bossFloat{0%,100%{transform:translateY(0) rotate(-3deg)}50%{transform:translateY(-8px) rotate(3deg)}}
-.boss-name{font-size:1.4rem;font-weight:900;color:var(--red);
-  text-shadow:0 0 20px rgba(248,113,113,.4);letter-spacing:1px}
-.boss-card.beaten .boss-name{color:var(--green);text-shadow:0 0 20px rgba(74,222,128,.4)}
-.boss-hp-wrap,.boss-dmg-wrap{width:100%}
-.boss-hp-label{display:flex;justify-content:space-between;font-size:.75rem;
-  color:var(--ink2);font-weight:600;margin-bottom:.35rem}
-.boss-hp-bar{height:14px;background:var(--c3);border-radius:7px;overflow:hidden}
-.boss-hp-fill{height:100%;background:linear-gradient(90deg,#ef4444,#dc2626);
-  border-radius:7px;transition:width .8s ease;
-  box-shadow:0 0 10px rgba(239,68,68,.4)}
-.boss-hp-fill.low{background:linear-gradient(90deg,#f97316,#ea580c);animation:hpPulse 1s infinite}
-@keyframes hpPulse{0%,100%{opacity:1}50%{opacity:.6}}
-.boss-dmg-fill{height:100%;background:linear-gradient(90deg,var(--gd),var(--gold));
-  border-radius:7px;transition:width .8s ease;
-  box-shadow:0 0 10px rgba(242,184,48,.3)}
-.boss-stats-row{display:grid;grid-template-columns:1fr 1fr 1fr;gap:.5rem;width:100%}
-.boss-stat{background:var(--c2);border:1px solid var(--br);border-radius:10px;
-  padding:.7rem .5rem;text-align:center}
-.boss-stat-val{font-size:1rem;font-weight:700;color:var(--gold);font-family:'IBM Plex Mono',monospace}
-.boss-stat-lbl{font-size:.65rem;color:var(--ink3);margin-top:.15rem}
-.boss-warning{background:rgba(248,113,113,.07);border:1px solid rgba(248,113,113,.2);
-  border-radius:10px;padding:.8rem 1rem;font-size:.8rem;color:var(--red);
-  text-align:center;font-weight:600;width:100%;line-height:1.5}
-.boss-victory{background:rgba(74,222,128,.07);border:1px solid rgba(74,222,128,.2);
-  border-radius:10px;padding:.8rem 1rem;font-size:.8rem;color:var(--green);
-  text-align:center;font-weight:600;width:100%;line-height:1.6}
-.boss-members{width:100%;margin-top:.5rem}
-.boss-members-title{font-size:.82rem;font-weight:800;color:var(--ink2);
-  margin-bottom:.7rem;display:flex;align-items:center;gap:.4rem}
-.boss-member{display:flex;align-items:center;gap:.6rem;margin-bottom:.55rem}
-.boss-member.me .boss-member-av{background:linear-gradient(135deg,var(--gold),var(--gd))}
-.boss-member-av{width:32px;height:32px;min-width:32px;border-radius:50%;
-  background:var(--c3);color:var(--ink);font-size:.85rem;font-weight:700;
-  display:flex;align-items:center;justify-content:center}
-.boss-member-body{flex:1;min-width:0}
-.boss-member-name{font-size:.75rem;font-weight:600;color:var(--ink2);margin-bottom:.25rem}
-.boss-member.me .boss-member-name{color:var(--gold)}
-.boss-member-bar-wrap{height:6px;background:var(--c3);border-radius:3px;overflow:hidden}
-.boss-member-bar{height:100%;background:linear-gradient(90deg,var(--gd),var(--gold));
-  border-radius:3px;transition:width .6s ease;min-width:0}
-.boss-member-time{font-size:.72rem;color:var(--ink3);font-family:'IBM Plex Mono',monospace;
-  min-width:30px;text-align:left;flex-shrink:0}
-
-
+/* ══ البانر الإعلاني المتحرك ══ */
 .ad-banner{
   width:100%;overflow:hidden;position:relative;z-index:400;
   background:#07090f;border-bottom:1px solid rgba(var(--accent-rgb),.18);
@@ -2233,7 +2048,7 @@ select option{background:var(--c2)}
       <div class="brand-tag">منصة التعليم التفاعلي</div>
     </div>
   </div>
-  <div style="display:flex;align-items:center;gap:.5rem">
+  <div style="display:flex;align-items:center;gap:.35rem;flex-shrink:0;min-width:0;overflow:hidden">
     <button class="theme-btn" onclick="openThemeModal()" title="تغيير الثيم">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><circle cx="12" cy="12" r="3"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
       ثيم
@@ -2243,7 +2058,7 @@ select option{background:var(--c2)}
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="13" height="13"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
       خروج
     </button>
-    <div class="top-pill" id="top-pill-alt">Squads · السادس</div>
+    <div class="top-pill" id="top-pill-alt" style="display:none">Squads · السادس</div>
   </div>
 </header>
 
@@ -2452,7 +2267,7 @@ select option{background:var(--c2)}
     </div>
   </div>
 
-  <div class="tabs" style="grid-template-columns:repeat(6,1fr)">
+  <div class="tabs" style="grid-template-columns:repeat(5,1fr)">
     <button class="tab on" id="tab-team"       onclick="switchTab('team')">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
       الفريق
@@ -2472,10 +2287,6 @@ select option{background:var(--c2)}
     <button class="tab" id="tab-stats" onclick="switchTab('stats')">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
       إحصائياتي
-    </button>
-    <button class="tab" id="tab-boss" onclick="switchTab('boss')">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l2.4 7.4H22l-6.2 4.5 2.4 7.4L12 17l-6.2 4.3 2.4-7.4L2 9.4h7.6z"/></svg>
-      البوس
     </button>
   </div>
 
@@ -2641,11 +2452,6 @@ select option{background:var(--c2)}
       <div class="tip-li"><span>✅</span><span>اضغط على الهدف لتحديده كمنجز</span></div>
       <div class="tip-li"><span>🔄</span><span>الأهداف تُحفظ محلياً وتُصفَّر كل يوم تلقائياً</span></div>
     </div>
-  </div>
-
-  <!-- TAB: BOSS -->
-  <div id="panel-boss" style="display:none">
-    <div id="boss-wrap"></div>
   </div>
 
   <!-- TAB: STATS -->
