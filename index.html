@@ -198,6 +198,7 @@ window.doSignup = async () => {
       name, email, branch, totalPts:0, totalSec:0, squadId:null, createdAt:serverTimestamp()
     });
     toast('تم التسجيل بنجاح! 🎉','ok');
+    setTimeout(() => window.showAnnounce(), 800);
   } catch(e) {
     const msg = e.code === 'auth/email-already-in-use' ? 'البريد مستخدم بالفعل' :
                 e.code === 'auth/invalid-email' ? 'البريد غير صحيح' :
@@ -230,6 +231,7 @@ window.doGoogleSignup = async () => {
       });
     }
     toast('تم التسجيل بنجاح! 🎉','ok');
+    setTimeout(() => window.showAnnounce(), 800);
   } catch(e) {
     const msg = e.code === 'auth/popup-blocked' ? 'تم حجب النافذة المنبثقة' :
                 e.code === 'auth/popup-closed-by-user' ? 'تم إغلاق نافذة جوجل' : 'خطأ في التسجيل';
@@ -2040,6 +2042,150 @@ select option{background:var(--c2)}
 }
 @keyframes fadeIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}</style>
 
+
+<style>
+/* ══ ANNOUNCEMENT MODAL ══ */
+#announce-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.65);
+  backdrop-filter: blur(4px);
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  opacity: 0;
+  transition: opacity 0.4s ease;
+  pointer-events: none;
+}
+#announce-overlay.show {
+  opacity: 1;
+  pointer-events: all;
+}
+#announce-box {
+  background: #1a1a2e;
+  border: 1.5px solid rgba(251,191,36,0.35);
+  border-radius: 18px;
+  max-width: 420px;
+  width: 100%;
+  padding: 1.6rem 1.4rem 1.3rem;
+  position: relative;
+  transform: translateY(24px) scale(0.97);
+  transition: transform 0.4s cubic-bezier(.22,1,.36,1);
+  box-shadow: 0 24px 60px rgba(0,0,0,0.5), 0 0 0 1px rgba(251,191,36,0.1);
+  direction: rtl;
+  font-family: 'Tajawal', sans-serif;
+}
+#announce-overlay.show #announce-box {
+  transform: translateY(0) scale(1);
+}
+.announce-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: .4rem;
+  background: rgba(251,191,36,0.12);
+  border: 1px solid rgba(251,191,36,0.3);
+  color: #fbbf24;
+  font-size: .75rem;
+  font-weight: 700;
+  padding: .28rem .75rem;
+  border-radius: 20px;
+  margin-bottom: .85rem;
+  letter-spacing: .02em;
+}
+.announce-title {
+  font-size: 1.05rem;
+  font-weight: 800;
+  color: #f1f5f9;
+  margin-bottom: .8rem;
+  line-height: 1.5;
+}
+.announce-body {
+  font-size: .84rem;
+  color: #94a3b8;
+  line-height: 1.75;
+  margin-bottom: .9rem;
+}
+.announce-body p { margin: 0 0 .55rem; }
+.announce-body p:last-child { margin-bottom: 0; }
+.announce-highlight {
+  background: rgba(251,191,36,0.08);
+  border-right: 3px solid #fbbf24;
+  padding: .55rem .75rem;
+  border-radius: 0 8px 8px 0;
+  color: #e2e8f0;
+  font-size: .83rem;
+  margin: .75rem 0;
+  font-style: italic;
+}
+.announce-meta {
+  display: flex;
+  flex-direction: column;
+  gap: .3rem;
+  margin: .8rem 0;
+}
+.announce-meta span {
+  font-size: .8rem;
+  color: #cbd5e1;
+  display: flex;
+  align-items: center;
+  gap: .4rem;
+}
+.announce-link {
+  display: block;
+  text-align: center;
+  background: linear-gradient(135deg, #fbbf24, #f59e0b);
+  color: #1a1a2e;
+  font-weight: 800;
+  font-size: .88rem;
+  padding: .7rem 1rem;
+  border-radius: 10px;
+  text-decoration: none;
+  margin-top: .85rem;
+  transition: opacity .2s;
+}
+.announce-link:hover { opacity: .88; }
+.announce-footer {
+  text-align: center;
+  font-size: .73rem;
+  color: #475569;
+  margin-top: .75rem;
+}
+.announce-close-btn {
+  position: absolute;
+  top: .9rem;
+  left: .9rem;
+  background: rgba(255,255,255,0.06);
+  border: none;
+  color: #64748b;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  cursor: pointer;
+  font-size: .85rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background .2s, color .2s;
+}
+.announce-close-btn:hover { background: rgba(255,255,255,0.12); color: #f1f5f9; }
+.announce-timer-bar {
+  position: absolute;
+  bottom: 0;
+  right: 0;
+  height: 3px;
+  background: linear-gradient(90deg, #fbbf24, #f59e0b);
+  border-radius: 0 0 18px 18px;
+  width: 100%;
+  transform-origin: right;
+  animation: timerShrink 10s linear forwards;
+}
+@keyframes timerShrink {
+  from { transform: scaleX(1); }
+  to   { transform: scaleX(0); }
+}
+</style>
 </head>
 <body>
 
@@ -2618,7 +2764,66 @@ select option{background:var(--c2)}
 <div id="pts-flash"></div>
 <div id="toast" class="toast"></div>
 
+<!-- ANNOUNCEMENT MODAL -->
+<div id="announce-overlay">
+  <div id="announce-box">
+    <button class="announce-close-btn" onclick="closeAnnounce()">✕</button>
+    <div class="announce-timer-bar" id="announce-timer-bar"></div>
+
+    <div class="announce-badge">⚠️ إشعار مهم</div>
+    <div class="announce-title">إشعار مهم لطلاب نظام سكواد</div>
+
+    <div class="announce-body">
+      <p>خلال الفترة الماضية كان نظام سكواد وسيلة لمساعدة الكثير من الطلاب على الالتزام بالدراسة والمتابعة اليومية.</p>
+      <p>واليوم، وبعد تطوير الفكرة بشكل أكبر، نعلن أن <strong style="color:#f1f5f9">نظام سكواد سيتوقف نهائياً بتاريخ 30/6</strong> ليحل محله <strong style="color:#fbbf24">نظام ميزان دراسة</strong> ضمن الباقة المدفوعة في منصة الميزان التعليمية.</p>
+    </div>
+
+    <div class="announce-highlight">
+      إذا كنت من الطلاب الذين عانوا من التسويف، أو بدأوا الدراسة أكثر من مرة ثم توقفوا، فالنظام الجديد صُمم ليكون رفيقك اليومي حتى تبقى على المسار الصحيح.
+    </div>
+
+    <div class="announce-body" style="margin-top:.5rem">
+      <p>لا تنتظر أن تتحسن نتائجك وحدها...<br>
+      <strong style="color:#e2e8f0">النتائج تتغير عندما تتغير طريقة الدراسة.</strong></p>
+    </div>
+
+    <div class="announce-meta">
+      <span>📅 آخر يوم للعمل بنظام سكواد: <strong style="color:#fbbf24">30/6</strong></span>
+      <span>📩 لمعرفة تفاصيل نظام ميزان دراسة</span>
+    </div>
+
+    <a class="announce-link" href="https://t.me/mizaniq1" target="_blank" rel="noopener">
+      🚀 تواصل معنا على تيليغرام
+    </a>
+
+    <div class="announce-footer">منصة الميزان التعليمية — لأن كل يوم يضيع بدون خطة... يبعدك خطوة عن هدفك.</div>
+  </div>
+</div>
+
 <script>
+// ══ نظام الإعلان المنبثق ══
+let announceTimer = null;
+
+window.showAnnounce = function() {
+  const overlay = document.getElementById('announce-overlay');
+  const bar = document.getElementById('announce-timer-bar');
+  if (!overlay) return;
+  // reset animation
+  bar.style.animation = 'none';
+  bar.offsetHeight; // reflow
+  bar.style.animation = 'timerShrink 10s linear forwards';
+  overlay.classList.add('show');
+  clearTimeout(announceTimer);
+  announceTimer = setTimeout(() => closeAnnounce(), 10000);
+};
+
+window.closeAnnounce = function() {
+  const overlay = document.getElementById('announce-overlay');
+  if (!overlay) return;
+  overlay.classList.remove('show');
+  clearTimeout(announceTimer);
+};
+
 window.pickBranch = function(b){
   document.getElementById('r-branch').value = b;
   document.getElementById('bb-sci').classList.toggle('sel', b==='علمي');
@@ -2664,6 +2869,11 @@ window.closeThemeModal = (e) => {
   const saved = localStorage.getItem('mizan_theme') || 'gold';
   applyTheme(saved);
 })();
+
+// ══ إظهار الإعلان تلقائياً عند فتح الصفحة ══
+window.addEventListener('load', function() {
+  setTimeout(() => window.showAnnounce(), 1500);
+});
 
 
 </script>
