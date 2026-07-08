@@ -1397,11 +1397,62 @@ function goScreen(id) {
   const target = G(id); if(target) target.style.display='block';
 }
 
-// ══ نظام مشاهدة المحاضرات (يوتيوب) ══
+// ══ نظام مشاهدة المحاضرات (يوتيوب) — مربوط بعداد الدراسة تلقائياً ══
 function extractYouTubeId(url) {
   if (!url) return null;
   const m = url.match(/(?:youtube\.com\/(?:[^\/\n]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/)([A-Za-z0-9_-]{11})/);
   return m ? m[1] : null;
+}
+
+let ytApiReady          = false;
+let ytPlayer            = null;
+let pendingLectureVideo = null;
+
+function ensureYouTubeAPI() {
+  if (window.YT && window.YT.Player) { ytApiReady = true; return; }
+  if (document.getElementById('yt-iframe-api')) return; // السكربت مسوّى تحميله
+  const tag = document.createElement('script');
+  tag.id  = 'yt-iframe-api';
+  tag.src = 'https://www.youtube.com/iframe_api';
+  document.head.appendChild(tag);
+  window.onYouTubeIframeAPIReady = () => {
+    ytApiReady = true;
+    if (pendingLectureVideo) {
+      const vid = pendingLectureVideo;
+      pendingLectureVideo = null;
+      createOrLoadYTPlayer(vid);
+    }
+  };
+}
+
+function createOrLoadYTPlayer(vid) {
+  if (ytPlayer && typeof ytPlayer.loadVideoById === 'function') {
+    ytPlayer.loadVideoById(vid);
+    return;
+  }
+  ytPlayer = new YT.Player('lecture-iframe', {
+    videoId: vid,
+    playerVars: { autoplay: 1, rel: 0 },
+    events: { onStateChange: handleYTStateChange }
+  });
+}
+
+function loadLectureVideo(vid) {
+  if (!ytApiReady) {
+    pendingLectureVideo = vid;
+    ensureYouTubeAPI();
+    return;
+  }
+  createOrLoadYTPlayer(vid);
+}
+
+// ▶️ العداد يشتغل بس إذا الفيديو فعلياً يشتغل، وينوقف (يتوقف مؤقتاً) إذا الطالب وقف/أنهى المحاضرة
+function handleYTStateChange(e) {
+  if (e.data === YT.PlayerState.PLAYING) {
+    if (!studyActive) startStudy();
+  } else if (e.data === YT.PlayerState.PAUSED || e.data === YT.PlayerState.ENDED) {
+    if (studyActive) pauseStudy();
+  }
 }
 
 window.watchLecture = async () => {
@@ -1414,12 +1465,9 @@ window.watchLecture = async () => {
     errEl.style.display = 'block';
     return;
   }
-  G('lecture-iframe').src = `https://www.youtube.com/embed/${vid}?autoplay=1&rel=0`;
   G('lecture-player-wrap').style.display = 'block';
   G('lecture-player-wrap').scrollIntoView({ behavior:'smooth', block:'start' });
-
-  // ▶️ نشغّل عداد الدراسة تلقائياً بمجرد ما يفتح المحاضرة، بدون ما يحتاج يفعّله بنفسه
-  if (!studyActive) startStudy();
+  loadLectureVideo(vid);
 
   try {
     await setDoc(doc(db,'users',uid,'lectures',vid), {
@@ -1434,9 +1482,9 @@ window.watchLecture = async () => {
 };
 
 window.playLectureFromHistory = (vid) => {
-  G('lecture-iframe').src = `https://www.youtube.com/embed/${vid}?autoplay=1&rel=0`;
   G('lecture-player-wrap').style.display = 'block';
   G('lecture-player-wrap').scrollIntoView({ behavior:'smooth', block:'start' });
+  loadLectureVideo(vid);
 };
 
 window.loadLectureHistory = async () => {
@@ -2608,7 +2656,7 @@ select option{background:var(--c2)}
     <div id="lecture-player-wrap" style="display:none;margin-bottom:.9rem">
       <div class="card" style="padding:.6rem">
         <div id="lecture-player-box" style="position:relative;width:100%;padding-top:56.25%;border-radius:10px;overflow:hidden;background:#000">
-          <iframe id="lecture-iframe" style="position:absolute;inset:0;width:100%;height:100%;border:0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
+          <div id="lecture-iframe" style="position:absolute;inset:0;width:100%;height:100%"></div>
         </div>
       </div>
     </div>
