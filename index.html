@@ -1418,12 +1418,19 @@ window.watchLecture = async () => {
   G('lecture-player-wrap').style.display = 'block';
   G('lecture-player-wrap').scrollIntoView({ behavior:'smooth', block:'start' });
 
+  // ▶️ نشغّل عداد الدراسة تلقائياً بمجرد ما يفتح المحاضرة، بدون ما يحتاج يفعّله بنفسه
+  if (!studyActive) startStudy();
+
   try {
     await setDoc(doc(db,'users',uid,'lectures',vid), {
       videoId: vid, url: raw, watchedAt: serverTimestamp()
     });
     loadLectureHistory();
-  } catch(e) { /* تجاهل خطأ الحفظ، المشاهدة أهم */ }
+  } catch(e) {
+    console.error('lecture save failed', e);
+    errEl.textContent = 'تعذّر حفظ المحاضرة بسجلك (خطأ: ' + (e.code || 'غير معروف') + ')';
+    errEl.style.display = 'block';
+  }
 };
 
 window.playLectureFromHistory = (vid) => {
@@ -1441,6 +1448,7 @@ window.loadLectureHistory = async () => {
     const snap = await getDocs(q);
     if (snap.empty) {
       wrap.innerHTML = '';
+      empty.textContent = 'ما شفت أي محاضرة لسه 🎬';
       empty.style.display = 'block';
       return;
     }
@@ -1456,8 +1464,10 @@ window.loadLectureHistory = async () => {
         </div>`;
     });
   } catch(e) {
+    console.error('lecture history load failed', e);
     wrap.innerHTML = '';
     empty.style.display = 'block';
+    empty.textContent = 'تعذّر تحميل السجل (خطأ: ' + (e.code || 'غير معروف') + ')';
   }
 };
 </script>
