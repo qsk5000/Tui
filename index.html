@@ -1,97 +1,2735 @@
 <!DOCTYPE html>
+
 <html lang="ar" dir="rtl">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>تنويه هام - منصتنا</title>
-    <style>
-        * {
-            box-sizing: border-box;
-            margin: 0;
-            padding: 0;
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-        }
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>ميزان — Squads | السادس الإعدادي</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@300;400;500;700;800;900&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 
-        body {
-            background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            height: 100vh;
-            color: #333;
-        }
+<script type="module">
+import { initializeApp }      from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged, browserLocalPersistence, setPersistence }
+                               from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+import { getFirestore, doc, setDoc, getDoc, getDocs, updateDoc, increment, deleteDoc,
+         onSnapshot, collection, query, orderBy, serverTimestamp, where, arrayRemove, arrayUnion, limit }
+                               from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 
-        .container {
-            background-color: #ffffff;
-            padding: 40px 30px;
-            border-radius: 16px;
-            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
-            text-align: center;
-            max-width: 500px;
-            width: 90%;
-            border-top: 6px solid #0088cc;
-        }
+const firebaseConfig = {
+  apiKey:            "AIzaSyCY9GD6GtBuqBBerYjKETbI0Ftt_-oMshs",
+  authDomain:        "mizanacadyme.firebaseapp.com",
+  databaseURL:       "https://mizanacadyme-default-rtdb.firebaseio.com",
+  projectId:         "mizanacadyme",
+  storageBucket:     "mizanacadyme.firebasestorage.app",
+  messagingSenderId: "561300998665",
+  appId:             "1:561300998665:web:88e69e503c23da63e0c6d8",
+  measurementId:     "G-08606KYYNC"
+};
 
-        .icon {
-            font-size: 50px;
-            color: #ffcc00;
-            margin-bottom: 20px;
-        }
+const app  = initializeApp(firebaseConfig);
+const db   = getFirestore(app);
+const auth = getAuth(app);
+setPersistence(auth, browserLocalPersistence);
 
-        h2 {
-            color: #2c3e50;
-            margin-bottom: 20px;
-            font-size: 24px;
-        }
+let uid         = null;
+let squadId     = null;
+let studyActive = false;
+let studySec    = 0;
+let studyTick   = null;
+let lastStudyTime = 0;
+let threeHourWarned = false;
+let currentSessionId = null; // ← مفتاح إصلاح الجلسات المكررة
+let isSaving = false;        // ← يمنع stopStudy تشتغل مرتين
 
-        p {
-            color: #5a6c7d;
-            font-size: 18px;
-            line-height: 1.6;
-            margin-bottom: 30px;
-        }
+const G       = id => document.getElementById(id);
+const setText = (id,v) => { const e=G(id); if(e) e.textContent=v; };
+const fmt     = n => n>=1000?(n/1000).toFixed(1)+'K':String(n);
+const fmtH    = s => s>=3600?(s/3600).toFixed(1)+'س':s>=60?Math.floor(s/60)+'د':s+'ث';
+window.toast  = (msg,type='info') => {
+  const t=G('toast'); t.textContent=msg; t.className='toast show t-'+type;
+  clearTimeout(t._t); t._t=setTimeout(()=>t.classList.remove('show'),4000);
+};
 
-        .btn-telegram {
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            background-color: #0088cc;
-            color: white;
-            text-decoration: none;
-            padding: 12px 30px;
-            border-radius: 25px;
-            font-size: 18px;
-            font-weight: bold;
-            transition: background-color 0.3s ease, transform 0.2s ease;
-            box-shadow: 0 4px 15px rgba(0, 136, 204, 0.3);
-        }
+const SUBJECTS = {
+  'علمي': ['📐 رياضيات','⚗️ كيمياء','🔬 فيزياء','🧬 أحياء','📖 عربي','🌍 إنجليزي'],
+  'أدبي': ['📖 عربي','🌍 إنجليزي','📜 تاريخ','🌐 جغرافية','💰 اقتصاد','⚖️ تربية وطنية']
+};
+const BADGES = ['🛡️','⚔️','🦅','🔥','🌟','💎','🦁','🚀','🏹','🌊','🐉','⚡'];
 
-        .btn-telegram:hover {
-            background-color: #006699;
-            transform: translateY(-2px);
-        }
+const CHALLENGE_STATES = {
+  pending: { label: '⏳ في الانتظار', color: '#fbbf24' },
+  active: { label: '🔥 جارٍ', color: '#f87171' },
+  completed: { label: '✅ اكتمل', color: '#4ade80' },
+  expired: { label: '⏰ انتهت', color: '#94a3b8' }
+};
 
-        .btn-telegram:active {
-            transform: translateY(0);
+function getStudentRank(pts) {
+  if (pts <= 100)  return { title: 'المكافح',           icon: '💪', msg: 'بداية الطريق، استمر!' };
+  if (pts <= 500)  return { title: 'المجتهد',           icon: '📚', msg: 'ماشي بالطريق الصح!' };
+  if (pts <= 1000) return { title: 'الدكتور',           icon: '🎓', msg: 'هيبة وشطارة، عاش!' };
+  return                  { title: 'أسطورة الـ 2026',  icon: '🏆', msg: 'أنت فوق المستوى!' };
+}
+
+const mizanTips = [
+  'عاش يدك يا بطل، الإصرار يوصلك للقمة 🔥',
+  'ترا السادس رحلة مو سباق، خطوة خطوة تفرق',
+  'الفرق الوحيد بين الناجح وغيره هو الثبات — ثبت!',
+  'حتى لو الجلسة صغيرة، أهم شي ما انقطعت',
+  'يا عين أمك، شوف كيف تتقدم كل يوم 💪',
+  'غداً راح تشكر نفسك على يوم اليوم',
+  'مو لازم تكون مثالي، لازم تكون مستمر فقط',
+  'كل دقيقة تدرسها هي نقطة تفرق في المحصلة'
+];
+const mizanTipsLong = [
+  'والله ثلاث ساعات مو شي بسيط، أنت من المجتهدين الحقيقيين 🏆',
+  'ما شاء الله عليك، جلسة طويلة تدل على همة عالية!',
+  'هذا النوع من التركيز نادر، محافظ عليه يا أسطورة!'
+];
+
+function getMizanTip(sessionSecs) {
+  if (sessionSecs > 7200) {
+    return mizanTipsLong[Math.floor(Math.random() * mizanTipsLong.length)];
+  }
+  return mizanTips[Math.floor(Math.random() * mizanTips.length)];
+}
+
+onAuthStateChanged(auth, async u => {
+  if (!u) {
+    goScreen('s-auth');
+    const logoutBtn = document.getElementById('logout-btn');
+    const userInfo  = document.getElementById('top-user-info');
+    if (logoutBtn) logoutBtn.style.display = 'none';
+    if (userInfo)  userInfo.style.display  = 'none';
+    return;
+  }
+  uid = u.uid;
+  const logoutBtn = document.getElementById('logout-btn');
+  const userInfo  = document.getElementById('top-user-info');
+  if (logoutBtn) logoutBtn.style.display = 'block';
+  if (userInfo)  userInfo.style.display  = 'block';
+  await boot();
+});
+
+async function boot() {
+  const snap = await getDoc(doc(db,'users',uid));
+  if (!snap.exists()) { goScreen('s-register'); return; }
+  const d = snap.data();
+  if (!d.squadId) { prefillLobby(d); goScreen('s-lobby'); return; }
+  squadId = d.squadId;
+  goScreen('s-squad');
+  bootSquad();
+  restoreStudyTimer();
+}
+
+window.switchAuth = (mode) => {
+  G('auth-login').style.display  = mode === 'login'  ? 'block' : 'none';
+  G('auth-signup').style.display = mode === 'signup' ? 'block' : 'none';
+};
+
+// ══ توليد بيانات دخول Firebase الداخلية من كود الطالب ══
+// الطالب لا يشوف بريد ولا باسورد إطلاقاً — كلشي مبني على الكود نفسه
+function codeToAuthEmail(code) {
+  const clean = code.toLowerCase().replace(/[^a-z0-9]/g,'');
+  return clean + '@mizaniq-kod.app';
+}
+function codeToAuthPass(code) {
+  return 'Mzn-' + code + '-Kod26!';
+}
+
+window.doLogin = async () => {
+  const rawCode = G('login-code').value.trim();
+  if (!rawCode) return toast('أدخل كودك','err');
+  const code = rawCode.toUpperCase().replace(/\s+/g,'');
+  try {
+    G('login-btn').disabled = true;
+    G('login-btn').textContent = '⏳ جاري الدخول…';
+    await signInWithEmailAndPassword(auth, codeToAuthEmail(code), codeToAuthPass(code));
+    toast('تم الدخول بنجاح! 🎉','ok');
+  } catch(e) {
+    const msg = (e.code === 'auth/user-not-found' || e.code === 'auth/invalid-credential' || e.code === 'auth/wrong-password')
+                ? 'الكود غير صحيح أو غير مسجل' : 'خطأ في الدخول';
+    toast(msg,'err');
+  } finally {
+    G('login-btn').disabled = false;
+    G('login-btn').textContent = '🔓 دخول';
+  }
+};
+
+// ══ التحقق من كود المنصة الخاص ══
+// كل كود مخزون كوثيقة في مجموعة accessCodes، بمعرّف = الكود نفسه (بأحرف كابيتل)
+// الحقول: { active:true, used:false, usedBy:null, usedAt:null, note:'' }
+async function verifyAccessCode(rawCode) {
+  const code = (rawCode || '').trim().toUpperCase().replace(/\s+/g,'');
+  if (!code) return { ok:false, msg:'أدخل كود المنصة' };
+  const ref  = doc(db,'accessCodes',code);
+  const snap = await getDoc(ref);
+  if (!snap.exists())        return { ok:false, msg:'كود المنصة غير صحيح ❌' };
+  const c = snap.data();
+  if (c.active === false)    return { ok:false, msg:'هذا الكود معطّل، راجع الدعم' };
+  if (c.used === true)       return { ok:false, msg:'هذا الكود مستخدم من قبل ❌' };
+  return { ok:true, code, ref };
+}
+
+async function markCodeUsed(ref, uid) {
+  await updateDoc(ref, { used:true, usedBy:uid, usedAt:serverTimestamp() });
+}
+
+window.doSignup = async () => {
+  const name    = G('signup-name').value.trim();
+  const branch  = G('signup-branch').value;
+  const rawCode = G('signup-code').value;
+
+  if (!name || !rawCode) return toast('أملأ الاسم وكود المنصة','err');
+
+  try {
+    G('signup-btn').disabled = true;
+    G('signup-btn').textContent = '⏳ جاري التحقق من الكود…';
+
+    const check = await verifyAccessCode(rawCode);
+    if (!check.ok) { toast(check.msg,'err'); return; }
+
+    G('signup-btn').textContent = '⏳ جاري التسجيل…';
+    const authEmail = codeToAuthEmail(check.code);
+    const authPass  = codeToAuthPass(check.code);
+    const res = await createUserWithEmailAndPassword(auth, authEmail, authPass);
+    await setDoc(doc(db,'users',res.user.uid), {
+      name, branch, totalPts:0, totalSec:0, squadId:null,
+      accessCode: check.code, createdAt:serverTimestamp()
+    });
+    await markCodeUsed(check.ref, res.user.uid);
+    toast('تم التسجيل بنجاح! 🎉','ok');
+  } catch(e) {
+    const msg = e.code === 'auth/email-already-in-use' ? 'هذا الكود مسجّل بحساب من قبل' :
+                e.code === 'auth/weak-password' ? 'خطأ داخلي بالكود، جرب كود ثاني' : 'خطأ في التسجيل';
+    toast(msg,'err');
+  } finally {
+    G('signup-btn').disabled = false;
+    G('signup-btn').textContent = '🚀 تسجيل';
+  }
+};
+
+window.doLogout = async () => {
+  try {
+    await signOut(auth);
+    toast('تم تسجيل الخروج','ok');
+  } catch(e) {
+    toast('خطأ في الخروج','err');
+  }
+};
+
+window.doRegister = async () => {
+  const name   = G('r-name').value.trim();
+  const branch = G('r-branch').value;
+  if (!name) return toast('اكتب اسمك الكامل','err');
+  await updateDoc(doc(db,'users',uid), { name, branch });
+  prefillLobby({ name, branch });
+  toast('أهلاً ' + name + ' 🎉','ok');
+  goScreen('s-lobby');
+};
+
+function prefillLobby(d) {
+  G('lobby-hello').textContent  = 'مرحباً، ' + d.name + ' 👋';
+  G('lobby-branch').textContent = d.branch === 'علمي' ? '🔬 الفرع العلمي' : '📖 الفرع الأدبي';
+}
+
+window.doCreate = async () => {
+  const name = G('c-name').value.trim();
+  if (!name || name.length < 2 || name.length > 22) return toast('اسم الفريق بين 2-22 حرف','err');
+  let code, exists=true, t=0;
+  while (exists && t<12) {
+    code = 'mizan' + Math.floor(1000+Math.random()*9000);
+    exists = (await getDoc(doc(db,'squads',code))).exists();
+    t++;
+  }
+  const badge = BADGES[Math.floor(Math.random()*BADGES.length)];
+  await setDoc(doc(db,'squads',code), {
+    name, badge, code,
+    members:[uid],
+    ownerId: uid,
+    totalPts:0, totalSec:0,
+    createdAt:serverTimestamp(),
+    activeChallenges:[]
+  });
+  await updateDoc(doc(db,'users',uid), { squadId:code });
+  squadId = code;
+  goScreen('s-squad'); bootSquad();
+  toast('تم إنشاء الفريق! 🛡️','ok');
+};
+
+window.doJoin = async () => {
+  let raw = G('j-code').value.trim().toLowerCase().replace(/\s/g,'');
+  const code = raw.startsWith('mizan') ? raw : 'mizan'+raw;
+  const snap = await getDoc(doc(db,'squads',code));
+  if (!snap.exists()) return toast('الكود غير صحيح ❌','err');
+  const sq = snap.data();
+  if (sq.members.length >= 5)        return toast('الفريق ممتلئ (5/5)','err');
+  if (sq.members.includes(uid))      return toast('أنت في الفريق بالفعل','warn');
+  await updateDoc(doc(db,'squads',code), { members:[...sq.members,uid] });
+  await updateDoc(doc(db,'users',uid),   { squadId:code });
+  squadId = code;
+  goScreen('s-squad'); bootSquad();
+  toast('انضممت لـ '+ sq.name +' 🎯','ok');
+};
+
+window.loadAvailableSquads = async () => {
+  const el = G('available-squads-wrap');
+  if (!el) return;
+  el.innerHTML = '<div style="text-align:center;color:var(--ink3);padding:1rem;font-size:.82rem">جاري التحميل...</div>';
+  try {
+    const snap = await getDocs(collection(db,'squads'));
+    const avail = [];
+    snap.forEach(d => {
+      const sq = d.data();
+      if (sq.members && sq.members.length < 5 && !sq.members.includes(uid)) {
+        avail.push({ id: d.id, ...sq });
+      }
+    });
+    el.innerHTML = '';
+    if (avail.length === 0) {
+      el.innerHTML = '<div style="text-align:center;color:var(--ink3);padding:1rem;font-size:.85rem">لا توجد فرق متاحة حالياً 🏁</div>';
+      return;
+    }
+    avail.forEach(sq => {
+      el.innerHTML += `<div class="avail-sq">
+        <div class="as-hd">
+          <span class="as-badge">${sq.badge || '🛡️'}</span>
+          <span class="as-nm">${sq.name}</span>
+        </div>
+        <div class="as-info">
+          <span class="as-members">👥 ${sq.members?.length || 0}/5</span>
+          <span class="as-pts">⚡ ${fmt(sq.totalPts||0)}</span>
+        </div>
+        <button class="btn btn-t" style="margin:0;font-size:.85rem;padding:.7rem" onclick="quickJoin('${sq.id}')">انضم الآن</button>
+      </div>`;
+    });
+  } catch(e) {
+    el.innerHTML = '<div style="text-align:center;color:var(--red);padding:1rem">خطأ في التحميل</div>';
+  }
+};
+
+window.quickJoin = async (code) => {
+  const snap = await getDoc(doc(db,'squads',code));
+  if (!snap.exists()) return toast('الفريق محذوف','err');
+  const sq = snap.data();
+  if (sq.members.length >= 5)   return toast('الفريق امتلأ','err');
+  if (sq.members.includes(uid)) return toast('أنت في الفريق بالفعل','warn');
+  await updateDoc(doc(db,'squads',code), { members:[...sq.members,uid] });
+  await updateDoc(doc(db,'users',uid),   { squadId:code });
+  squadId = code;
+  goScreen('s-squad'); bootSquad();
+  toast('انضممت لـ '+ sq.name +' 🎯','ok');
+};
+
+window.leaveSquad = async () => {
+  if (!confirm('هل أنت متأكد من مغادرة الفريق؟ لن تفقد نقاطك الشخصية.')) return;
+  try {
+    const sqSnap = await getDoc(doc(db,'squads',squadId));
+    if (!sqSnap.exists()) {
+      await updateDoc(doc(db,'users',uid), { squadId: null });
+      squadId = null;
+      goScreen('s-lobby');
+      const uSnap = await getDoc(doc(db,'users',uid));
+      prefillLobby(uSnap.data());
+      return;
+    }
+    const sq = sqSnap.data();
+    const newMembers = sq.members.filter(m => m !== uid);
+    if (newMembers.length === 0) {
+      await deleteDoc(doc(db,'squads',squadId));
+    } else {
+      const updates = { members: newMembers };
+      if (sq.ownerId === uid) updates.ownerId = newMembers[0];
+      await updateDoc(doc(db,'squads',squadId), updates);
+    }
+    await updateDoc(doc(db,'users',uid), { squadId: null });
+    squadId = null;
+    stopStudyQuiet();
+    goScreen('s-lobby');
+    const uSnap = await getDoc(doc(db,'users',uid));
+    prefillLobby(uSnap.data());
+    toast('غادرت الفريق 👋','ok');
+  } catch(e) {
+    console.error(e);
+    toast('خطأ في المغادرة','err');
+  }
+};
+
+window.kickMember = async (targetUid) => {
+  if (!confirm('هل تريد طرد هذا العضو من الفريق؟')) return;
+  try {
+    const sqSnap = await getDoc(doc(db,'squads',squadId));
+    if (!sqSnap.exists()) return;
+    const sq = sqSnap.data();
+    if (sq.ownerId !== uid) return toast('فقط القائد يستطيع الطرد','err');
+    const newMembers = sq.members.filter(m => m !== targetUid);
+    await updateDoc(doc(db,'squads',squadId), { members: newMembers });
+    await updateDoc(doc(db,'users',targetUid), { squadId: null });
+    toast('تم طرد العضو ✅','ok');
+  } catch(e) {
+    console.error(e);
+    toast('خطأ في الطرد','err');
+  }
+};
+
+let currentSquad = null;
+
+function bootSquad() {
+  const membersCache = {};
+  onSnapshot(doc(db,'squads',squadId), async snap => {
+    if (!snap.exists()) {
+      await updateDoc(doc(db,'users',uid), { squadId: null }).catch(()=>{});
+      squadId = null;
+      goScreen('s-lobby');
+      const uSnap = await getDoc(doc(db,'users',uid));
+      if (uSnap.exists()) prefillLobby(uSnap.data());
+      return;
+    }
+    const sq = snap.data();
+    const isOwner = sq.ownerId === uid;
+
+    setText('sq-name',  sq.badge+' '+sq.name);
+    setText('sq-code',  sq.code||squadId);
+    setText('sq-count', sq.members.length+'/5 أعضاء');
+    setText('sq-pts',   fmt(sq.totalPts||0));
+    setText('sq-hrs',   fmtH(sq.totalSec||0));
+
+    const leaveBtn = G('leave-squad-btn');
+    if (leaveBtn) leaveBtn.style.display = 'block';
+
+    // عرض الأعضاء (مع cache لتقليل القراءات)
+    const wrap = G('members-wrap');
+    if (wrap) {
+      wrap.innerHTML = '';
+      for (const mid of sq.members) {
+        if (!membersCache[mid]) {
+          const us = await getDoc(doc(db,'users',mid));
+          if (us.exists()) membersCache[mid] = us.data();
         }
-    </style>
+        const u = membersCache[mid];
+        if (!u) continue;
+        const me = mid === uid;
+        const pct = sq.totalPts ? Math.round((u.totalPts||0)/sq.totalPts*100) : 0;
+        const rank = getStudentRank(u.totalPts||0);
+        const d = document.createElement('div');
+        d.className = 'mc'+(me?' is-me':'');
+        d.innerHTML = `
+          <div class="mc-av">${u.name[0]}</div>
+          <div class="mc-body">
+            <div class="mc-name">${u.name}${me?'<span class="me-chip">أنت</span>':''}
+              <span class="rank-chip">${rank.icon} ${rank.title}</span>
+            </div>
+            <div class="mc-sub">${u.branch==='علمي'?'🔬 علمي':'📖 أدبي'} · السادس الإعدادي</div>
+            <div class="mc-bar"><div class="mc-fill" style="width:${pct}%"></div></div>
+          </div>
+          <div class="mc-r">
+            <div class="mc-pts">⚡${fmt(u.totalPts||0)}</div>
+            <div class="mc-hrs">${fmtH(u.totalSec||0)}</div>
+            ${isOwner && !me ? `<button class="kick-btn" onclick="kickMember('${mid}')">❌ طرد</button>` : ''}
+          </div>`;
+        wrap.appendChild(d);
+      }
+    }
+  });
+
+  // تصنيف الفرق - onSnapshot مقبول (عدد قليل)
+  const lbQ = query(collection(db,'squads'), orderBy('totalPts','desc'));
+  onSnapshot(lbQ, snap => {
+    const el = G('lb-wrap');
+    if (!el) return;
+    el.innerHTML = '';
+    const M = ['🥇','🥈','🥉'];
+    snap.docs.forEach((d,i) => {
+      const sq = d.data(), mine = d.id === squadId;
+      el.innerHTML += `<div class="lb-row${mine?' mine':''}">
+        <span class="lb-pos">${M[i]||'#'+(i+1)}</span>
+        <div class="lb-mid"><span class="lb-nm">${sq.badge} ${sq.name}</span><span class="lb-ct">${(sq.members||[]).length} أعضاء</span></div>
+        <div class="lb-end"><span class="lb-p">⚡${fmt(sq.totalPts||0)}</span><span class="lb-h">⏱${fmtH(sq.totalSec||0)}</span></div>
+      </div>`;
+    });
+    if (snap.empty) el.innerHTML = '<div class="lb-empty">لا توجد فرق بعد 🏁</div>';
+  });
+
+  // تصنيف الأفراد - يُحمَّل مرة واحدة فقط عند الضغط على التاب
+  let soloLoaded = false;
+  window.loadSoloLeaderboard = async () => {
+    if (soloLoaded) return;
+    soloLoaded = true;
+    const el = G('lb-solo-wrap');
+    if (!el) return;
+    el.innerHTML = '<div class="lb-empty">جاري التحميل...</div>';
+    try {
+      const soloQ = query(collection(db,'users'), orderBy('totalPts','desc'), limit(30));
+      const snap = await getDocs(soloQ);
+      el.innerHTML = '';
+      const M = ['🥇','🥈','🥉'];
+      let rank = 0;
+      snap.forEach((d,i) => {
+        const u = d.data();
+        if (!(u.totalPts > 0) && !(u.totalSec > 0)) return;
+        rank++;
+        const me = d.id === uid;
+        const r  = getStudentRank(u.totalPts||0);
+        el.innerHTML += `<div class="lb-row${me?' mine':''}">
+          <span class="lb-pos">${M[rank-1]||'#'+rank}</span>
+          <div class="lb-mid">
+            <span class="lb-nm">${u.name||'طالب'}</span>
+            <span class="lb-ct">${r.icon} ${r.title} · ${u.branch==='علمي'?'🔬 علمي':'📖 أدبي'}${u.squadId?'':' · <span style="color:var(--amber)">بدون فريق</span>'}</span>
+          </div>
+          <div class="lb-end"><span class="lb-p">⚡${fmt(u.totalPts||0)}</span><span class="lb-h">⏱${fmtH(u.totalSec||0)}</span></div>
+        </div>`;
+      });
+      if (rank === 0) el.innerHTML = '<div class="lb-empty">لا توجد بيانات بعد 🏁</div>';
+    } catch(e) {
+      el.innerHTML = '<div class="lb-empty">خطأ في التحميل</div>';
+    }
+  };
+
+  // بيانات المستخدم الشخصية
+  onSnapshot(doc(db,'users',uid), snap => {
+    if (!snap.exists()) return;
+    const u = snap.data();
+    setText('my-pts', fmt(u.totalPts||0));
+    setText('my-hrs', fmtH(u.totalSec||0));
+
+    const rank = getStudentRank(u.totalPts||0);
+    const userInfo = G('top-user-info');
+    if (userInfo) userInfo.textContent = `${rank.icon} ${u.name} — ${rank.title}`;
+
+    const sel = G('subj-sel');
+    if (sel) {
+      sel.innerHTML = '';
+      (SUBJECTS[u.branch]||SUBJECTS['علمي']).forEach(s => {
+        const o = document.createElement('option'); o.value = s; o.textContent = s; sel.appendChild(o);
+      });
+    }
+  });
+}
+
+window.openChallengeModal = async () => {
+  G('challenge-modal').style.display = 'flex';
+  await loadOpponentSquads();
+};
+window.closeChallengeModal = () => {
+  G('challenge-modal').style.display = 'none';
+};
+
+async function loadOpponentSquads() {
+  const wrap = G('opponent-squads-wrap');
+  if (!wrap) return;
+  wrap.innerHTML = '<div style="text-align:center;color:var(--ink3)">جاري التحميل...</div>';
+  try {
+    const snap = await getDocs(collection(db,'squads'));
+    wrap.innerHTML = '';
+    let count = 0;
+    snap.forEach(d => {
+      if (d.id === squadId) return;
+      const sq = d.data();
+      count++;
+      wrap.innerHTML += `<div class="opp-card">
+        <div class="opp-nm">${sq.badge || '🛡️'} ${sq.name}</div>
+        <div class="opp-info">👥 ${sq.members?.length || 0}/5 · ⚡ ${fmt(sq.totalPts||0)}</div>
+        <button class="btn btn-p" style="margin:0;font-size:.85rem;padding:.7rem" onclick="sendChallenge('${d.id}')">تحدي</button>
+      </div>`;
+    });
+    if (count === 0) wrap.innerHTML = '<div style="text-align:center;color:var(--ink3);padding:1rem;font-size:.85rem">لا توجد فرق أخرى</div>';
+  } catch(e) {
+    console.error(e);
+    wrap.innerHTML = '<div style="text-align:center;color:var(--red);padding:1rem">خطأ في التحميل</div>';
+  }
+}
+
+window.sendChallenge = async (oppId) => {
+  const duration = parseInt(G('challenge-duration').value) || 24;
+  const sq    = (await getDoc(doc(db,'squads',squadId))).data();
+  const oppSq = (await getDoc(doc(db,'squads',oppId))).data();
+  const chalId = 'chal_' + Date.now() + '_' + Math.random().toString(36).substr(2,5);
+  const endsAt = new Date(Date.now() + duration*60*60*1000);
+  
+  const chalObj = {
+    id:chalId, team1Id:squadId, team1Name:sq.name, team1Badge:sq.badge, team1Pts:0,
+    team2Id:oppId, team2Name:oppSq.name, team2Badge:oppSq.badge, team2Pts:0,
+    status:'pending', durationHours:duration, createdAt:new Date().toISOString(), endsAt:endsAt.toISOString()
+  };
+  
+  await updateDoc(doc(db,'squads',squadId), { activeChallenges: arrayUnion(chalObj) });
+  await updateDoc(doc(db,'squads',oppId), { activeChallenges: arrayUnion(chalObj) });
+  closeChallengeModal();
+  toast('تم إرسال التحدي! 🎯','ok');
+};
+
+window.acceptChallenge = async (chalId) => {
+  const sqSnap = await getDoc(doc(db,'squads',squadId));
+  const sq = sqSnap.data();
+  const chalIdx = (sq.activeChallenges||[]).findIndex(c => c.id === chalId);
+  if (chalIdx === -1) return;
+  
+  const updated = [...sq.activeChallenges];
+  updated[chalIdx].status = 'active';
+  await updateDoc(doc(db,'squads',squadId), { activeChallenges: updated });
+  toast('🔥 تم قبول التحدي!','ok');
+};
+
+function saveStudyState() {
+  // ✅ الإصلاح: نحفظ الـ absolute start timestamp
+  // بدلاً من حفظ studySec فقط، نحفظ متى بدأت الجلسة بالضبط
+  // حتى لو الصفحة انغلقت أو راحت للخلفية، نقدر نحسب الوقت الصحيح
+  if (studyActive) {
+    // studySessionAbsStart = وقت فعلي للبدء مع خصم ما مضى قبل هذه المقطع
+    const absStart = Date.now() - studySec * 1000;
+    localStorage.setItem('mizan_study_abs_start', absStart);
+  }
+  localStorage.setItem('mizan_study_sec',    studySec);
+  localStorage.setItem('mizan_study_saved',  Date.now());
+  localStorage.setItem('mizan_study_active', studyActive ? '1' : '0');
+  if (currentSessionId) localStorage.setItem('mizan_session_id', currentSessionId);
+}
+function clearStudyState() {
+  localStorage.removeItem('mizan_study_sec');
+  localStorage.removeItem('mizan_study_saved');
+  localStorage.removeItem('mizan_study_active');
+  localStorage.removeItem('mizan_study_bg_ts');
+  localStorage.removeItem('mizan_session_id');
+  localStorage.removeItem('mizan_study_abs_start');
+  currentSessionId = null;
+}
+function restoreStudyTimer() {
+  const wasActive  = localStorage.getItem('mizan_study_active');
+  const absStart   = localStorage.getItem('mizan_study_abs_start');
+  const savedSec   = parseInt(localStorage.getItem('mizan_study_sec') || '0');
+
+  if (!savedSec && !absStart) return;
+
+  currentSessionId = localStorage.getItem('mizan_session_id') || null;
+
+  if (wasActive === '1' && absStart) {
+    // ✅ الإصلاح الجذري: نحسب كم ثانية مضت من وقت البدء الفعلي
+    // هذا يعطينا الوقت الصحيح حتى لو الصفحة كانت مغلقة أو في الخلفية
+    const elapsed = Math.floor((Date.now() - parseInt(absStart)) / 1000);
+    studySec = Math.max(0, elapsed);
+    startStudy();
+    toast('✅ الجلسة استُعيدت — كل الوقت محتسب صح', 'ok');
+  } else {
+    studySec = savedSec;
+    renderClock();
+  }
+
+  localStorage.removeItem('mizan_study_bg_ts');
+}
+
+// ── معالجة الخروج للخلفية (يوتيوب، واتساب، إلخ) ──
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    // الصفحة راحت للخلفية — نحفظ الحالة
+    if (studyActive) {
+      saveStudyState();
+    }
+  } else {
+    // ✅ الإصلاح: عند الرجوع، نحسب الوقت من الـ absStart مباشرة
+    // هذا أدق بكثير من حساب فرق البداية/النهاية
+    if (studyActive) {
+      const absStart = localStorage.getItem('mizan_study_abs_start');
+      if (absStart) {
+        clearInterval(studyTick);
+        studyTick = null;
+        // نعيد تشغيل الـ interval من الوضع الصحيح
+        startStudy();
+      }
+    }
+  }
+});
+
+// احتياطي عند إغلاق/إعادة تحميل الصفحة
+window.addEventListener('pagehide', () => {
+  if (studyActive) {
+    localStorage.setItem('mizan_study_bg_ts', Date.now());
+    saveStudyState();
+  }
+});
+
+let sessionMode      = false;
+let sessionTarget    = 0;
+let sessionRemaining = 0;
+let sessionBreakTime = 0;
+let isOnBreak        = false;
+
+window.openSessionModal = () => {
+  G('session-modal').style.display = 'flex';
+};
+window.closeSessionModal = () => {
+  G('session-modal').style.display = 'none';
+};
+
+window.startSession = async () => {
+  const hours     = parseFloat(G('session-hours').value) || 1;
+  const breakMins = parseInt(G('session-break').value)   || 5;
+
+  if (hours < 0.5 || hours > 24) return toast('اختر ساعات بين 0.5 و 24','err');
+  if (breakMins < 1 || breakMins > 120) return toast('اختر استراحة بين 1 و 120 دقيقة','err');
+
+  sessionTarget    = hours * 3600;
+  sessionRemaining = sessionTarget;
+  sessionBreakTime = breakMins * 60;
+  sessionMode      = true;
+  isOnBreak        = false;
+  studySec         = 0;
+  threeHourWarned  = false;
+  currentSessionId = null; // ← جلسة جديدة = ID جديد
+  isSaving         = false; // ← reset الـ flag
+
+  closeSessionModal();
+  switchTab('study');
+
+  G('session-info').style.display = 'block';
+  updateSessionInfo();
+  toast(`جلسة ${hours} ساعة مع استراحات ${breakMins} دقيقة! 🎯`,'ok');
+};
+
+function updateSessionInfo() {
+  if (!sessionMode) return;
+  const remaining = Math.max(0, sessionTarget - studySec);
+  const percent   = Math.min(100, ((sessionTarget - remaining) / sessionTarget) * 100);
+  setText('session-target',      `الهدف: ${Math.floor(sessionTarget/3600)}س`);
+  setText('session-remaining',   `المتبقي: ${Math.floor(remaining/3600)}س ${Math.floor((remaining%3600)/60)}د`);
+  setText('session-progress-num',`${Math.round(percent)}%`);
+  G('session-progress-bar').style.width = `${percent}%`;
+  if (remaining <= 0 && !isOnBreak) completeSession();
+}
+
+function completeSession() {
+  sessionMode = false;
+  G('session-info').style.display = 'none';
+  stopStudy();
+  toast('أحسنت! اكملت الجلسة! 🎉','ok');
+}
+
+let currentMood = null; // يحفظ مزاج الجلسة الحالية
+
+const MOOD_DATA = {
+  '😴': { label: 'تعبان',   msg: 'حتى لو تعبان، 30 دقيقة تفرق! جسمك يتكيف مع الدراسة بسرعة 💪',        color: '#60a5fa' },
+  '😐': { label: 'عادي',    msg: 'المزاج العادي أفضل وقت للمراجعة — ما عندك تشتت 📖',                   color: '#fbbf24' },
+  '😊': { label: 'زين',     msg: 'مزاجك زين = جلسة ذهب! استغل هذا الوقت للمواد الصعبة 🔥',             color: '#4ade80' },
+  '🔥': { label: 'متحمس',   msg: 'هذه الطاقة نادرة يا بطل — اشتغل على أصعب موضوع عندك الآن! 🚀',      color: '#f97316' },
+  '😤': { label: 'ضاغط',    msg: 'الضغط يصير، خذ نفس عميق وابدأ بخطوة صغيرة — انت تقدر ⭐',           color: '#c084fc' }
+};
+
+window.openMoodCheck = () => {
+  // إذا جلسة شغالة، أوقفها مباشرة
+  if (studyActive) { stopStudy(); return; }
+  if (isSaving) return;
+  G('mood-modal').classList.add('open');
+};
+
+window.closeMoodModal = (e) => {
+  if (!e || e.target === G('mood-modal')) {
+    G('mood-modal').classList.remove('open');
+  }
+};
+
+window.selectMood = (mood) => {
+  currentMood = mood;
+  // نحدث الـ UI — نبرز الاختيار
+  document.querySelectorAll('.mood-btn').forEach(b => {
+    b.classList.toggle('selected', b.dataset.mood === mood);
+  });
+  const data = MOOD_DATA[mood];
+  const msgEl = G('mood-msg');
+  if (msgEl) {
+    msgEl.textContent = data.msg;
+    msgEl.style.color = data.color;
+    msgEl.style.display = 'block';
+  }
+};
+
+window.confirmMoodAndStart = () => {
+  G('mood-modal').classList.remove('open');
+  // نحفظ المزاج في localStorage لنضيفه للجلسة
+  if (currentMood) localStorage.setItem('mizan_session_mood', currentMood);
+  startStudy();
+};
+window.toggleStudy  = () => { studyActive ? stopStudy() : openMoodCheck(); };
+window.pauseResume  = () => { studyActive ? pauseStudy() : resumeStudy(); };
+
+function startStudy() {
+  if (studyTick) { clearInterval(studyTick); studyTick = null; }
+  studyActive     = true;
+  threeHourWarned = false;
+  if (!currentSessionId) {
+    currentSessionId = 'sess_' + Date.now() + '_' + Math.random().toString(36).slice(2,7);
+  }
+  localStorage.setItem('mizan_session_id', currentSessionId);
+
+  // ✅ الإصلاح الجوهري: نحفظ absStart مرة واحدة فقط عند البدء الفعلي
+  // إذا كان موجود بالفعل (استئناف) نستخدمه كما هو
+  if (!localStorage.getItem('mizan_study_abs_start')) {
+    const absStart = Date.now() - studySec * 1000;
+    localStorage.setItem('mizan_study_abs_start', absStart);
+  }
+
+  G('study-btn').classList.add('running');
+  setText('study-lbl', '⏹ إنهاء الجلسة');
+  G('timer-box').style.display = 'flex';
+  const pb = G('pause-btn');
+  if (pb) { pb.style.display = 'flex'; pb.textContent = '⏸'; pb.classList.add('paused-state'); }
+  const subjEl = G('timer-subject-lbl');
+  if (subjEl) { const sel = G('subj-sel'); subjEl.textContent = sel ? sel.value : '📚 جاري الدراسة'; }
+  renderClock();
+
+  studyTick = setInterval(() => {
+    // ✅ الحساب دائماً من absStart — لا يتأثر بتأخير setInterval
+    const absStart = parseInt(localStorage.getItem('mizan_study_abs_start') || '0');
+    if (absStart) {
+      studySec = Math.floor((Date.now() - absStart) / 1000);
+    }
+    renderClock();
+    if (sessionMode) updateSessionInfo();
+
+    if (studySec >= 10800 && !threeHourWarned) {
+      threeHourWarned = true;
+      toast('⚠️ درست 3 ساعات! خذ استراحة 15 دقيقة للحفاظ على تركيزك 🧠','warn');
+    }
+
+    if (sessionMode && studySec > 0 && studySec % sessionBreakTime === 0 && !isOnBreak && (sessionTarget - studySec) > 0) {
+      isOnBreak = true;
+      pauseStudy();
+      toast(`⏰ استراحة! خذ ${Math.floor(sessionBreakTime/60)} دقائق 🌿`,'ok');
+      setTimeout(() => {
+        if (isOnBreak) {
+          isOnBreak = false;
+          toast('الاستراحة انتهت! ارجع للدراسة 💪','ok');
+        }
+      }, sessionBreakTime * 1000);
+    }
+
+    // نحفظ كل 30 ثانية فقط لتقليل الضغط
+    if (studySec % 30 === 0) saveStudyState();
+  }, 1000);
+}
+
+function pauseStudy() {
+  if (!studyActive) return;
+  // ✅ عند الإيقاف المؤقت، نحفظ studySec الحالي وننظف absStart
+  // حتى عند الاستئناف نبدأ من هنا
+  const absStart = parseInt(localStorage.getItem('mizan_study_abs_start') || '0');
+  if (absStart) {
+    studySec = Math.floor((Date.now() - absStart) / 1000);
+  }
+  studyActive = false;
+  clearInterval(studyTick);
+  studyTick = null;
+  localStorage.removeItem('mizan_study_abs_start');
+  localStorage.setItem('mizan_study_sec', studySec);
+  G('study-btn').classList.remove('running');
+  setText('study-lbl', '⏹ إنهاء الجلسة');
+  const pb = G('pause-btn');
+  if (pb) { pb.textContent = '▶'; pb.classList.remove('paused-state'); }
+}
+
+function resumeStudy() {
+  if (studyActive) return;
+  startStudy();
+}
+
+function stopStudyQuiet() {
+  studyActive = false;
+  clearInterval(studyTick);
+  studySec = 0;
+  const pb = G('pause-btn');
+  if (pb) { pb.style.display = 'none'; pb.textContent = '⏸'; pb.classList.add('paused-state'); }
+  clearStudyState();
+}
+
+async function stopStudy() {
+  if (isSaving) return; // ← منع التكرار من ضغطات متعددة
+  isSaving = true;
+
+  studyActive = false;
+  clearInterval(studyTick);
+  G('study-btn').classList.remove('running');
+  setText('study-lbl', '▶ ابدأ الدراسة');
+  G('timer-box').style.display = 'none';
+  const pb = G('pause-btn');
+  if (pb) { pb.style.display = 'none'; pb.textContent = '⏸'; pb.classList.add('paused-state'); }
+  clearStudyState();
+
+  if (studySec < 60) {
+    toast('الجلسة أقل من دقيقة — لم تُحتسب','warn');
+    studySec = 0; renderClock();
+    isSaving = false;
+    return;
+  }
+
+  const pts        = Math.floor(studySec/60);
+  const secs       = studySec;
+  const subj       = G('subj-sel').value;
+  const sessionSecs = studySec;
+
+  studySec = 0;
+  renderClock();
+
+  const pending = JSON.parse(localStorage.getItem('mizan_pending_pts') || '[]');
+  const sessionMood = localStorage.getItem('mizan_session_mood') || null;
+  localStorage.removeItem('mizan_session_mood');
+  pending.push({ pts, secs, subj, uid, squadId, ts: Date.now(), sessionId: currentSessionId, mood: sessionMood });
+  localStorage.setItem('mizan_pending_pts', JSON.stringify(pending));
+  currentSessionId = null;
+
+  toast('أحسنت! +'+pts+' نقطة ('+subj+') — جاري الحفظ...','ok');
+  flash('+'+pts+' ⚡');
+  const tip = getMizanTip(sessionSecs);
+  setTimeout(() => toast('💬 ' + tip, 'ok'), 1000);
+
+  await flushPendingPts();
+  isSaving = false;
+}
+
+// يرسل كل النقاط المحفوظة محلياً للسيرفر
+async function flushPendingPts() {
+  const pending = JSON.parse(localStorage.getItem('mizan_pending_pts') || '[]');
+  if (pending.length === 0) return;
+
+  const toSend = [...pending];
+  localStorage.removeItem('mizan_pending_pts');
+
+  try {
+    for (const entry of toSend) {
+      const sessionDocId = entry.sessionId || ('sess_' + entry.ts);
+      const sessionRef   = doc(db, 'sessions', sessionDocId);
+
+      // ← تحقق أولاً — إذا الجلسة موجودة بالفعل، تجاهلها ولا تضيف نقاط مكررة
+      const existing = await getDoc(sessionRef);
+      if (existing.exists()) continue;
+
+      await updateDoc(doc(db,'users', entry.uid),    { totalPts:increment(entry.pts), totalSec:increment(entry.secs) });
+      await updateDoc(doc(db,'squads',entry.squadId), { totalPts:increment(entry.pts), totalSec:increment(entry.secs) });
+
+      await setDoc(sessionRef, {
+        uid: entry.uid, squadId: entry.squadId, subject: entry.subj,
+        seconds: entry.secs, pts: entry.pts, ts: serverTimestamp(),
+        sessionMode, sessionTarget, mood: entry.mood || null,
+        date: new Date().toISOString().slice(0,10)
+      });
+    }
+  } catch(e) {
+    const stillPending = JSON.parse(localStorage.getItem('mizan_pending_pts') || '[]');
+    localStorage.setItem('mizan_pending_pts', JSON.stringify([...toSend, ...stillPending]));
+    toast('لا يوجد اتصال — ستُحفظ النقاط عند عودة النت 📶','warn');
+  }
+}
+
+// عند رجوع النت، ارسل النقاط المعلقة تلقائياً
+window.addEventListener('online', () => {
+  const pending = JSON.parse(localStorage.getItem('mizan_pending_pts') || '[]');
+  if (pending.length > 0) {
+    toast('رجع النت — جاري حفظ نقاطك 📶','ok');
+    flushPendingPts();
+  }
+});
+
+function renderClock() {
+  const h = String(Math.floor(studySec/3600)).padStart(2,'0');
+  const m = String(Math.floor(studySec%3600/60)).padStart(2,'0');
+  const s = String(studySec%60).padStart(2,'0');
+  setText('clock', h+':'+m+':'+s);
+}
+function flash(t){ const e=G('pts-flash'); e.textContent=t; e.classList.add('on'); setTimeout(()=>e.classList.remove('on'),2200); }
+
+window.copyCode = () => { navigator.clipboard.writeText(G('sq-code').textContent).then(()=>toast('تم النسخ 📋','ok')); };
+window.switchRankTab = tab => {
+  G('rpanel-squads').style.display = tab==='squads' ? 'block' : 'none';
+  G('rpanel-solo').style.display   = tab==='solo'   ? 'block' : 'none';
+  G('rtab-squads').classList.toggle('on', tab==='squads');
+  G('rtab-solo').classList.toggle('on',   tab==='solo');
+  if (tab === 'solo' && typeof loadSoloLeaderboard === 'function') loadSoloLeaderboard();
+};
+window.switchTab = tab => {
+  ['team','study','lectures','rank','challenges','stats'].forEach(t => {
+    const panel = G('panel-'+t);
+    const tabEl = G('tab-'+t);
+    if (panel) panel.style.display = t===tab ? 'block' : 'none';
+    if (tabEl)  tabEl.classList.toggle('on', t===tab);
+  });
+  if (tab === 'challenges') renderGoals();
+  if (tab === 'stats') loadStats('today');
+  if (tab === 'lectures') loadLectureHistory();
+};
+window.toggleForm = w => {
+  const c=G('form-c'), j=G('form-j'), av=G('form-av');
+  if (w==='c') {
+    c.style.display  = c.style.display==='none'?'block':'none';
+    j.style.display  = 'none';
+    if(av) av.style.display = 'none';
+  } else if (w==='j') {
+    j.style.display  = j.style.display==='none'?'block':'none';
+    c.style.display  = 'none';
+    if(av) av.style.display = 'none';
+  } else {
+    if(av) {
+      av.style.display = av.style.display==='none'?'block':'none';
+      if (av.style.display==='block') loadAvailableSquads();
+    }
+    c.style.display = 'none';
+    j.style.display = 'none';
+  }
+};
+// ══ أهداف اليوم (localStorage فقط — صفر reads) ══
+function goalsKey() {
+  const today = new Date().toISOString().slice(0,10);
+  return 'mizan_goals_' + today;
+}
+function loadGoals() {
+  try { return JSON.parse(localStorage.getItem(goalsKey()) || '[]'); } catch { return []; }
+}
+function saveGoals(goals) {
+  localStorage.setItem(goalsKey(), JSON.stringify(goals));
+}
+function renderGoals() {
+  const goals = loadGoals();
+  const wrap  = G('goals-wrap');
+  const empty = G('goals-empty');
+  if (!wrap) return;
+  wrap.innerHTML = '';
+  if (goals.length === 0) {
+    if (empty) empty.style.display = 'block';
+    return;
+  }
+  if (empty) empty.style.display = 'none';
+  goals.forEach((g, i) => {
+    const div = document.createElement('div');
+    div.className = 'goal-item' + (g.done ? ' done' : '');
+    div.innerHTML = `
+      <div class="goal-check" onclick="toggleGoal(${i})">${g.done ? '✅' : '⬜'}</div>
+      <div class="goal-text">${g.text}</div>
+      <button class="goal-del" onclick="deleteGoal(${i})">✕</button>`;
+    wrap.appendChild(div);
+  });
+}
+window.addGoal = () => {
+  const inp = G('goal-input');
+  const text = inp.value.trim();
+  if (!text) return;
+  const goals = loadGoals();
+  goals.push({ text, done: false });
+  saveGoals(goals);
+  inp.value = '';
+  renderGoals();
+};
+window.toggleGoal = i => {
+  const goals = loadGoals();
+  if (goals[i]) goals[i].done = !goals[i].done;
+  saveGoals(goals);
+  renderGoals();
+};
+window.deleteGoal = i => {
+  const goals = loadGoals();
+  goals.splice(i, 1);
+  saveGoals(goals);
+  renderGoals();
+};
+// مسح أهداف أيام قديمة لتوفير مساحة
+(function cleanOldGoals() {
+  const today = new Date().toISOString().slice(0,10);
+  Object.keys(localStorage).forEach(k => {
+    if (k.startsWith('mizan_goals_') && !k.endsWith(today)) localStorage.removeItem(k);
+  });
+})();
+
+// ══ POMODORO ══
+let pomoWorkMins  = 25;
+let pomoBreakMins = 5;
+let pomoTotalRounds = 4;
+let pomoRound     = 0;
+let pomoPhase     = 'work'; // 'work' | 'break'
+let pomoSec       = 0;
+let pomoActive    = false;
+let pomoTick      = null;
+let pomoBgTs      = null;
+
+const POMO_CIRCUMFERENCE = 2 * Math.PI * 52; // 326.7
+
+function pomoInit() {
+  pomoSec = pomoWorkMins * 60;
+  pomoPhase = 'work';
+  renderPomoRounds();
+  renderPomoClock();
+  updatePomoArc();
+}
+
+function renderPomoRounds() {
+  const row = document.getElementById('pomo-rounds-row');
+  if (!row) return;
+  row.innerHTML = '';
+  for (let i = 0; i < pomoTotalRounds; i++) {
+    const d = document.createElement('div');
+    d.className = 'pomo-dot' + (i < pomoRound ? ' done' : i === pomoRound && pomoActive ? ' active' : '');
+    d.textContent = i < pomoRound ? '✓' : '🍅';
+    row.appendChild(d);
+  }
+}
+
+function renderPomoClock() {
+  const m = String(Math.floor(pomoSec / 60)).padStart(2,'0');
+  const s = String(pomoSec % 60).padStart(2,'0');
+  const el = document.getElementById('pomo-clock');
+  if (el) el.textContent = m + ':' + s;
+  const icon = document.getElementById('pomo-phase-icon');
+  const lbl  = document.getElementById('pomo-phase-lbl');
+  if (icon) icon.textContent = pomoPhase === 'work' ? '🍅' : '☕';
+  if (lbl)  lbl.textContent  = pomoPhase === 'work' ? 'دراسة' : 'استراحة';
+}
+
+function updatePomoArc() {
+  const arc = document.getElementById('pomo-arc');
+  if (!arc) return;
+  const total = (pomoPhase === 'work' ? pomoWorkMins : pomoBreakMins) * 60;
+  const ratio = total > 0 ? pomoSec / total : 0;
+  arc.style.strokeDashoffset = POMO_CIRCUMFERENCE * (1 - ratio);
+  arc.classList.toggle('break-mode', pomoPhase === 'break');
+}
+
+window.pomoToggle = () => { pomoActive ? pomoPause() : pomoStart(); };
+
+function pomoStart() {
+  if (pomoSec <= 0) pomoInit();
+  pomoActive = true;
+  const btn = document.getElementById('pomo-main-btn');
+  if (btn) { btn.textContent = '⏸'; btn.classList.add('running'); }
+  const segStart = Date.now();
+  const secAtStart = pomoSec;
+  renderPomoRounds();
+  pomoTick = setInterval(() => {
+    const elapsed = Math.floor((Date.now() - segStart) / 1000);
+    pomoSec = Math.max(0, secAtStart - elapsed);
+    renderPomoClock();
+    updatePomoArc();
+    if (pomoSec <= 0) {
+      clearInterval(pomoTick);
+      pomoTick = null;
+      pomoActive = false;
+      const btn2 = document.getElementById('pomo-main-btn');
+      if (btn2) { btn2.textContent = '▶'; btn2.classList.remove('running'); }
+      if (pomoPhase === 'work') {
+        pomoRound++;
+        const earnedPts = pomoWorkMins;
+        // احتساب النقاط تلقائياً
+        if (uid && squadId && earnedPts > 0) {
+          const pending = JSON.parse(localStorage.getItem('mizan_pending_pts') || '[]');
+          const subj = document.getElementById('subj-sel')?.value || '—';
+          pending.push({ pts: earnedPts, secs: pomoWorkMins * 60, subj, uid, squadId, ts: Date.now() });
+          localStorage.setItem('mizan_pending_pts', JSON.stringify(pending));
+          flash('+' + earnedPts + ' ⚡');
+          flushPendingPts();
+        }
+        if (pomoRound >= pomoTotalRounds) {
+          toast('🎉 أتممت ' + pomoTotalRounds + ' جولات! استراحة طويلة تستاهلها يا بطل 🏆', 'ok');
+          pomoRound = 0;
+          pomoPhase = 'work';
+          pomoInit();
+        } else {
+          toast('✅ جولة ' + pomoRound + ' خلصت! خذ استراحة ☕', 'ok');
+          pomoPhase = 'break';
+          pomoSec = pomoBreakMins * 60;
+          renderPomoRounds();
+          renderPomoClock();
+          updatePomoArc();
+          // تشغيل الاستراحة تلقائياً
+          setTimeout(() => { if (!pomoActive) pomoStart(); }, 1500);
+        }
+      } else {
+        toast('💪 انتهت الاستراحة! ابدأ الجولة ' + (pomoRound + 1), 'ok');
+        pomoPhase = 'work';
+        pomoSec = pomoWorkMins * 60;
+        renderPomoClock();
+        updatePomoArc();
+      }
+    }
+  }, 500);
+}
+
+function pomoPause() {
+  pomoActive = false;
+  clearInterval(pomoTick);
+  pomoTick = null;
+  const btn = document.getElementById('pomo-main-btn');
+  if (btn) { btn.textContent = '▶'; btn.classList.remove('running'); }
+  renderPomoRounds();
+}
+
+window.pomoReset = () => {
+  pomoPause();
+  pomoRound = 0;
+  pomoInit();
+};
+
+window.pomoSkip = () => {
+  pomoPause();
+  if (pomoPhase === 'work') {
+    pomoPhase = 'break';
+    pomoSec = pomoBreakMins * 60;
+  } else {
+    pomoPhase = 'work';
+    pomoRound = Math.min(pomoRound + 1, pomoTotalRounds - 1);
+    pomoSec = pomoWorkMins * 60;
+  }
+  renderPomoRounds();
+  renderPomoClock();
+  updatePomoArc();
+};
+
+window.pomoAdjust = (type, delta) => {
+  if (type === 'work') {
+    pomoWorkMins = Math.max(5, Math.min(60, pomoWorkMins + delta));
+    document.getElementById('pomo-work-val').textContent = pomoWorkMins;
+    if (pomoPhase === 'work' && !pomoActive) { pomoSec = pomoWorkMins * 60; renderPomoClock(); updatePomoArc(); }
+  } else {
+    pomoBreakMins = Math.max(1, Math.min(30, pomoBreakMins + delta));
+    document.getElementById('pomo-break-val').textContent = pomoBreakMins;
+    if (pomoPhase === 'break' && !pomoActive) { pomoSec = pomoBreakMins * 60; renderPomoClock(); updatePomoArc(); }
+  }
+};
+
+window.switchStudyMode = (mode) => {
+  const normalPanel = document.getElementById('normal-panel');
+  const pomoPanel   = document.getElementById('pomo-panel');
+  const btnNormal   = document.getElementById('smode-normal');
+  const btnPomo     = document.getElementById('smode-pomo');
+  if (mode === 'pomo') {
+    normalPanel.style.display = 'none';
+    pomoPanel.style.display   = 'block';
+    btnNormal.classList.remove('on');
+    btnPomo.classList.add('on');
+    pomoInit();
+  } else {
+    pomoPanel.style.display   = 'none';
+    normalPanel.style.display = 'block';
+    btnPomo.classList.remove('on');
+    btnNormal.classList.add('on');
+    pomoPause();
+  }
+};
+
+// معالجة الخلفية للبومودورو
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    if (pomoActive) pomoBgTs = Date.now();
+  } else {
+    if (pomoActive && pomoBgTs) {
+      const elapsed = Math.floor((Date.now() - pomoBgTs) / 1000);
+      pomoBgTs = null;
+      clearInterval(pomoTick);
+      pomoTick = null;
+      pomoSec = Math.max(0, pomoSec - elapsed);
+      pomoActive = false;
+      pomoStart();
+    }
+  }
+});
+
+// ══ إحصائيات الطالب ══
+let currentStatsPeriod = 'today';
+
+window.switchStatsPeriod = (period) => {
+  currentStatsPeriod = period;
+  ['today','week','month','all'].forEach(p => {
+    const btn = G('sp-'+p);
+    if (btn) btn.classList.toggle('on', p === period);
+  });
+  loadStats(period);
+};
+
+async function loadStats(period) {
+  const loading = G('stats-loading');
+  const content = G('stats-content');
+  const empty   = G('stats-empty');
+  if (loading) loading.style.display = 'block';
+  if (content) content.style.display = 'none';
+  if (empty)   empty.style.display   = 'none';
+
+  try {
+    const now   = new Date();
+    let startDate;
+    if (period === 'today') {
+      startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    } else if (period === 'week') {
+      const day = now.getDay();
+      startDate = new Date(now); startDate.setDate(now.getDate() - day); startDate.setHours(0,0,0,0);
+    } else if (period === 'month') {
+      startDate = new Date(now.getFullYear(), now.getMonth(), 1);
+    } else {
+      startDate = null;
+    }
+
+    // نجيب كل جلسات الطالب بدون orderBy لتجنب الحاجة لـ composite index
+    const q = query(collection(db,'sessions'), where('uid','==',uid));
+    const snap = await getDocs(q);
+    let sessions = [];
+    snap.forEach(d => sessions.push(d.data()));
+
+    // نفلتر حسب الفترة محلياً
+    if (startDate) {
+      sessions = sessions.filter(s => {
+        if (!s.ts) return false;
+        const t = s.ts.toDate ? s.ts.toDate() : new Date(s.ts);
+        return t >= startDate;
+      });
+    }
+
+    // نرتب من الأحدث للأقدم محلياً
+    sessions.sort((a, b) => {
+      const ta = a.ts?.toDate ? a.ts.toDate() : new Date(a.ts || 0);
+      const tb = b.ts?.toDate ? b.ts.toDate() : new Date(b.ts || 0);
+      return tb - ta;
+    });
+
+    if (sessions.length === 0) {
+      if (loading) loading.style.display = 'none';
+      if (empty)   empty.style.display = 'block';
+      return;
+    }
+
+    // حساب الإجماليات
+    let totalSec = 0, totalPts = 0;
+    const subjectMap = {};
+    const dayMap = {};
+
+    sessions.forEach(s => {
+      totalSec += s.seconds || 0;
+      totalPts += s.pts     || 0;
+      const subj = s.subject || '—';
+      subjectMap[subj] = (subjectMap[subj] || 0) + (s.seconds || 0);
+
+      // نشاط الأيام (للأسبوع)
+      if (s.ts && s.ts.toDate) {
+        const d = s.ts.toDate();
+        const dayNames = ['الأحد','الاثنين','الثلاثاء','الأربعاء','الخميس','الجمعة','السبت'];
+        const dayKey   = dayNames[d.getDay()];
+        dayMap[dayKey] = (dayMap[dayKey] || 0) + (s.seconds || 0);
+      }
+    });
+
+    const avgSec = Math.floor(totalSec / sessions.length);
+
+    // عرض الأرقام
+    setText('stat-hours',    fmtH(totalSec));
+    setText('stat-pts',      fmt(totalPts));
+    setText('stat-sessions', String(sessions.length));
+    setText('stat-avg',      fmtH(avgSec));
+
+    // توزيع المواد
+    const subjEl = G('stats-subjects');
+    if (subjEl) {
+      const sorted = Object.entries(subjectMap).sort((a,b)=>b[1]-a[1]);
+      const maxSec = sorted[0]?.[1] || 1;
+      subjEl.innerHTML = sorted.map(([name, secs]) => {
+        const pct = Math.round(secs / maxSec * 100);
+        return `<div class="subj-stat-row">
+          <div class="subj-stat-name">${name}</div>
+          <div class="subj-stat-bar-wrap">
+            <div class="subj-stat-bar" style="width:${pct}%"></div>
+          </div>
+          <div class="subj-stat-time">${fmtH(secs)}</div>
+        </div>`;
+      }).join('');
+    }
+
+    // نشاط الأيام
+    const daysCard = G('stats-days-card');
+    const daysEl   = G('stats-days');
+    if (period !== 'today' && Object.keys(dayMap).length > 0) {
+      if (daysCard) daysCard.style.display = 'block';
+      if (daysEl) {
+        const dayNames = ['الأحد','الاثنين','الثلاثاء','الأربعاء','الخميس','الجمعة','السبت'];
+        const maxDay = Math.max(...Object.values(dayMap), 1);
+        daysEl.innerHTML = dayNames.map(day => {
+          const secs = dayMap[day] || 0;
+          const pct  = Math.round(secs / maxDay * 100);
+          return `<div class="day-stat-row">
+            <div class="day-stat-name">${day}</div>
+            <div class="subj-stat-bar-wrap">
+              <div class="subj-stat-bar day-bar" style="width:${Math.max(pct,secs>0?4:0)}%"></div>
+            </div>
+            <div class="subj-stat-time">${secs > 0 ? fmtH(secs) : '—'}</div>
+          </div>`;
+        }).join('');
+      }
+    } else {
+      if (daysCard) daysCard.style.display = 'none';
+    }
+
+    // الإنجازات
+    const badgesEl = G('stats-badges');
+    if (badgesEl) {
+      const badges = [];
+      if (totalSec >= 3600)   badges.push({ icon:'🕐', title:'ساعة كاملة',    desc:'درست ساعة أو أكثر' });
+      if (totalSec >= 18000)  badges.push({ icon:'🔥', title:'خمس ساعات',     desc:'درست 5 ساعات أو أكثر' });
+      if (totalSec >= 36000)  badges.push({ icon:'💎', title:'عشر ساعات',     desc:'درست 10 ساعات أو أكثر' });
+      if (sessions.length >= 5)  badges.push({ icon:'📚', title:'5 جلسات',    desc:'أكملت 5 جلسات دراسة' });
+      if (sessions.length >= 20) badges.push({ icon:'🏆', title:'20 جلسة',    desc:'أكملت 20 جلسة دراسة' });
+      if (Object.keys(subjectMap).length >= 3) badges.push({ icon:'🌟', title:'متنوع',  desc:'درست 3 مواد أو أكثر' });
+      if (totalPts >= 100)   badges.push({ icon:'⚡', title:'100 نقطة',       desc:'جمعت 100 نقطة أو أكثر' });
+      if (totalPts >= 500)   badges.push({ icon:'🚀', title:'500 نقطة',       desc:'جمعت 500 نقطة أو أكثر' });
+
+      if (badges.length === 0) {
+        badgesEl.innerHTML = '<div style="color:var(--ink3);font-size:.82rem;text-align:center;padding:.5rem">درّس أكثر لتحصل على إنجازات! 💪</div>';
+      } else {
+        badgesEl.innerHTML = badges.map(b => `
+          <div class="badge-row">
+            <span class="badge-icon">${b.icon}</span>
+            <div><div class="badge-title">${b.title}</div><div class="badge-desc">${b.desc}</div></div>
+          </div>`).join('');
+      }
+    }
+
+    if (loading) loading.style.display = 'none';
+    if (content) content.style.display = 'block';
+
+  } catch(e) {
+    console.error(e);
+    if (loading) loading.style.display = 'none';
+    if (empty) { empty.style.display = 'block'; empty.textContent = 'خطأ في تحميل الإحصائيات ❌'; }
+  }
+}
+
+function goScreen(id) {
+  ['s-auth','s-register','s-lobby','s-squad'].forEach(s => {
+    const el = G(s); if(el) el.style.display='none';
+  });
+  const target = G(id); if(target) target.style.display='block';
+}
+
+// ══ نظام مشاهدة المحاضرات (يوتيوب) ══
+function extractYouTubeId(url) {
+  if (!url) return null;
+  const m = url.match(/(?:youtube\.com\/(?:[^\/\n]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/)([A-Za-z0-9_-]{11})/);
+  return m ? m[1] : null;
+}
+
+window.watchLecture = async () => {
+  const raw = G('lecture-url').value.trim();
+  const errEl = G('lecture-err');
+  errEl.style.display = 'none';
+  const vid = extractYouTubeId(raw);
+  if (!vid) {
+    errEl.textContent = 'رابط غير صحيح، تأكد إنه رابط يوتيوب سليم ❌';
+    errEl.style.display = 'block';
+    return;
+  }
+  G('lecture-iframe').src = `https://www.youtube.com/embed/${vid}?autoplay=1&rel=0`;
+  G('lecture-player-wrap').style.display = 'block';
+  G('lecture-player-wrap').scrollIntoView({ behavior:'smooth', block:'start' });
+
+  try {
+    await setDoc(doc(db,'users',uid,'lectures',vid), {
+      videoId: vid, url: raw, watchedAt: serverTimestamp()
+    });
+    loadLectureHistory();
+  } catch(e) { /* تجاهل خطأ الحفظ، المشاهدة أهم */ }
+};
+
+window.playLectureFromHistory = (vid) => {
+  G('lecture-iframe').src = `https://www.youtube.com/embed/${vid}?autoplay=1&rel=0`;
+  G('lecture-player-wrap').style.display = 'block';
+  G('lecture-player-wrap').scrollIntoView({ behavior:'smooth', block:'start' });
+};
+
+window.loadLectureHistory = async () => {
+  const wrap  = G('lecture-history');
+  const empty = G('lecture-history-empty');
+  if (!wrap || !uid) return;
+  try {
+    const q = query(collection(db,'users',uid,'lectures'), orderBy('watchedAt','desc'), limit(10));
+    const snap = await getDocs(q);
+    if (snap.empty) {
+      wrap.innerHTML = '';
+      empty.style.display = 'block';
+      return;
+    }
+    empty.style.display = 'none';
+    wrap.innerHTML = '';
+    snap.forEach(d => {
+      const v = d.data();
+      const thumb = `https://img.youtube.com/vi/${v.videoId}/mqdefault.jpg`;
+      wrap.innerHTML += `
+        <div class="lecture-hist-item" onclick="playLectureFromHistory('${v.videoId}')" style="display:flex;align-items:center;gap:.6rem;padding:.5rem;border-radius:10px;cursor:pointer;margin-bottom:.4rem;background:rgba(255,255,255,.03)">
+          <img src="${thumb}" style="width:64px;height:36px;object-fit:cover;border-radius:6px;flex-shrink:0"/>
+          <span style="font-size:.78rem;color:var(--ink2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${v.url}</span>
+        </div>`;
+    });
+  } catch(e) {
+    wrap.innerHTML = '';
+    empty.style.display = 'block';
+  }
+};
+</script>
+
+<style>
+:root{
+  --bg:    #06080f;
+  --c1:    #0f1624;
+  --c2:    #162035;
+  --c3:    #1e2d48;
+  --gold:  #f2b830;
+  --gd:    #d4950a;
+  --glow:  rgba(242,184,48,.16);
+  --teal:  #2dd4bf;
+  --blue:  #60a5fa;
+  --green: #4ade80;
+  --red:   #f87171;
+  --amber: #fbbf24;
+  --ink:   #e2e8f8;
+  --ink2:  #94a3b8;
+  --ink3:  #475569;
+  --br:    rgba(255,255,255,.055);
+  --r:     15px;
+  /* ثيم متغيرات — تتغير حسب اختيار الطالب */
+  --accent:      #f2b830;
+  --accent-dark: #d4950a;
+  --accent-glow: rgba(242,184,48,.16);
+  --accent-rgb:  242,184,48;
+}
+
+/* ══ الثيمات ══ */
+body.theme-purple{
+  --bg:#07040f; --c1:#120b1e; --c2:#1a1030; --c3:#241640;
+  --accent:#a78bfa; --accent-dark:#7c3aed; --accent-glow:rgba(167,139,250,.16); --accent-rgb:167,139,250;
+  --gold:#a78bfa; --gd:#7c3aed; --glow:rgba(167,139,250,.16);
+}
+body.theme-emerald{
+  --bg:#030f0a; --c1:#071a10; --c2:#0d2518; --c3:#133020;
+  --accent:#34d399; --accent-dark:#059669; --accent-glow:rgba(52,211,153,.16); --accent-rgb:52,211,153;
+  --gold:#34d399; --gd:#059669; --glow:rgba(52,211,153,.16);
+}
+body.theme-rose{
+  --bg:#0f0608; --c1:#1e0c10; --c2:#2d1118; --c3:#3d1620;
+  --accent:#fb7185; --accent-dark:#e11d48; --accent-glow:rgba(251,113,133,.16); --accent-rgb:251,113,133;
+  --gold:#fb7185; --gd:#e11d48; --glow:rgba(251,113,133,.16);
+}
+body.theme-sky{
+  --bg:#040810; --c1:#0a1220; --c2:#101c30; --c3:#162640;
+  --accent:#38bdf8; --accent-dark:#0284c7; --accent-glow:rgba(56,189,248,.16); --accent-rgb:56,189,248;
+  --gold:#38bdf8; --gd:#0284c7; --glow:rgba(56,189,248,.16);
+}
+body.theme-light{
+  --bg:#f1f5f9; --c1:#ffffff; --c2:#f8fafc; --c3:#e2e8f0;
+  --accent:#f2b830; --accent-dark:#d4950a; --accent-glow:rgba(242,184,48,.2); --accent-rgb:242,184,48;
+  --gold:#d4950a; --gd:#b45309; --glow:rgba(212,149,10,.2);
+  --ink:#1e293b; --ink2:#475569; --ink3:#94a3b8; --br:rgba(0,0,0,.08);
+  --red:#dc2626; --green:#16a34a; --teal:#0d9488;
+}
+
+/* ══ زر الثيم في التوب بار ══ */
+.theme-btn{background:none;border:1px solid var(--br);color:var(--ink3);
+  padding:.3rem .65rem;border-radius:20px;font-size:.72rem;cursor:pointer;
+  font-family:'Tajawal',sans-serif;font-weight:700;transition:all .2s;
+  display:flex;align-items:center;gap:.4rem}
+.theme-btn:hover{border-color:var(--accent);color:var(--accent)}
+
+/* ══ مودال الثيمات ══ */
+.theme-modal{display:none;position:fixed;inset:0;z-index:9999;
+  align-items:flex-end;justify-content:center;
+  background:rgba(0,0,0,.55);backdrop-filter:blur(6px)}
+.theme-modal.open{display:flex}
+.theme-sheet{background:var(--c1);border:1px solid var(--br);
+  border-radius:24px 24px 0 0;padding:1.5rem 1.2rem 2.5rem;
+  width:100%;max-width:460px;animation:slideUp .25s ease}
+@keyframes slideUp{from{transform:translateY(100%)}to{transform:translateY(0)}}
+.theme-sheet-hd{display:flex;justify-content:space-between;align-items:center;margin-bottom:1.2rem}
+.theme-sheet-hd span{font-size:1rem;font-weight:800;color:var(--accent)}
+.theme-close{background:none;border:none;color:var(--ink3);font-size:1.3rem;cursor:pointer;line-height:1}
+.themes-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:.75rem}
+.theme-card{border:2px solid var(--br);border-radius:14px;padding:.9rem .5rem;
+  text-align:center;cursor:pointer;transition:all .2s;background:var(--c2)}
+.theme-card:hover{transform:translateY(-2px);box-shadow:0 8px 24px rgba(0,0,0,.3)}
+.theme-card.active{border-color:var(--accent);box-shadow:0 0 0 3px rgba(var(--accent-rgb),.15)}
+.theme-swatch{width:36px;height:36px;border-radius:50%;margin:0 auto .5rem;
+  display:flex;align-items:center;justify-content:center;font-size:1.1rem}
+.theme-card-name{font-size:.78rem;font-weight:700;color:var(--ink2)}
+*{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+body{font-family:'Tajawal',sans-serif;background:var(--bg);color:var(--ink);min-height:100vh;direction:rtl;overflow-x:hidden}
+
+body::before{content:'';position:fixed;inset:0;pointer-events:none;z-index:0;
+  background:
+    radial-gradient(ellipse 80% 55% at 8% -5%,  rgba(242,184,48,.07) 0%,transparent 52%),
+    radial-gradient(ellipse 55% 45% at 92% 98%, rgba(45,212,191,.05) 0%,transparent 55%),
+    radial-gradient(ellipse 40% 30% at 50% 50%, rgba(96,165,250,.03) 0%,transparent 58%);}
+body::after{content:'';position:fixed;inset:0;pointer-events:none;z-index:0;
+  background-image:linear-gradient(var(--br) 1px,transparent 1px),linear-gradient(90deg,var(--br) 1px,transparent 1px);
+  background-size:56px 56px;}
+
+.topbar{position:sticky;top:0;z-index:300;display:flex;align-items:center;justify-content:space-between;
+  padding:.6rem .9rem;background:rgba(6,8,15,.9);backdrop-filter:blur(24px) saturate(180%);border-bottom:1px solid var(--br);
+  gap:.4rem;min-width:0;}
+.brand{display:flex;align-items:center;gap:.5rem;flex-shrink:0;min-width:0;}
+.brand-logo{width:32px;height:32px;min-width:32px;border-radius:9px;background:linear-gradient(135deg,var(--gold),var(--gd));
+  display:flex;align-items:center;justify-content:center;font-size:1rem;font-weight:900;color:#06080f;
+  box-shadow:0 0 14px var(--glow);flex-shrink:0;}
+.brand-name{font-size:.97rem;font-weight:900;letter-spacing:-.3px;
+  background:linear-gradient(135deg,var(--gold) 40%,#fff);-webkit-background-clip:text;-webkit-text-fill-color:transparent;}
+.brand-tag{font-size:.58rem;color:var(--ink3);font-weight:500;margin-top:.05rem;display:none;}
+@media(min-width:380px){.brand-tag{display:block}}
+.top-pill{font-size:.62rem;color:var(--ink3);background:var(--c1);border:1px solid var(--br);
+  padding:.2rem .55rem;border-radius:20px;font-family:'IBM Plex Mono',monospace;
+  white-space:nowrap;max-width:110px;overflow:hidden;text-overflow:ellipsis;flex-shrink:1;}
+.top-logout{background:none;border:none;color:var(--ink3);font-size:.7rem;cursor:pointer;
+  padding:.35rem .6rem;border-radius:6px;transition:all .2s;font-family:'Tajawal',sans-serif;font-weight:700;
+  display:flex;align-items:center;gap:.25rem;flex-shrink:0;white-space:nowrap;}
+.top-logout:hover{color:var(--red);background:rgba(248,113,113,.1)}
+
+.wrap{position:relative;z-index:1;max-width:460px;margin:0 auto;padding:1rem .75rem 6rem}
+
+#s-auth{min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:1.5rem .9rem;background:transparent}
+.auth-container{width:100%;max-width:380px}
+.auth-hero{text-align:center;margin-bottom:1.8rem;animation:fadeUp .5s ease both}
+.auth-icon{font-size:4rem;display:block;margin-bottom:.9rem;animation:float 3.5s ease-in-out infinite;
+  filter:drop-shadow(0 0 20px rgba(242,184,48,.4))}
+@keyframes float{0%,100%{transform:translateY(0)}50%{transform:translateY(-10px)}}
+.auth-title{font-size:2.2rem;font-weight:900;letter-spacing:-.5px;
+  background:linear-gradient(145deg,var(--gold) 30%,rgba(255,255,255,.95));
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;margin-bottom:.5rem;}
+.auth-sub{font-size:.88rem;color:var(--ink2);line-height:1.7;opacity:.85}
+.auth-badges{display:flex;justify-content:center;gap:.5rem;margin-top:.9rem;flex-wrap:wrap}
+.auth-badge{font-size:.68rem;color:var(--ink3);background:var(--c1);
+  border:1px solid var(--br);border-radius:20px;padding:.2rem .65rem;font-weight:600}
+
+.auth-form{background:var(--c1);border:1px solid var(--br);border-radius:18px;
+  padding:1.6rem 1.5rem;margin-bottom:.8rem;animation:fadeUp .45s ease both;
+  box-shadow:0 20px 60px rgba(0,0,0,.4),0 0 0 1px rgba(255,255,255,.04) inset}
+.auth-form h3{font-size:1rem;font-weight:800;color:var(--gold);margin-bottom:1.3rem;
+  display:flex;align-items:center;gap:.6rem;padding-bottom:.8rem;
+  border-bottom:1px solid var(--br)}
+.auth-form input{width:100%;background:var(--c2);border:1.5px solid var(--br);border-radius:11px;
+  color:var(--ink);font-family:'Tajawal',sans-serif;font-size:.93rem;padding:.88rem 1rem;
+  margin-bottom:.75rem;outline:none;transition:border-color .2s,box-shadow .2s;direction:rtl;}
+.auth-form input:focus{border-color:rgba(var(--accent-rgb),.5);box-shadow:0 0 0 3px rgba(var(--accent-rgb),.08);background:var(--c3)}
+.auth-form input::placeholder{color:var(--ink3)}
+
+.branch-row{display:grid;grid-template-columns:1fr 1fr;gap:.7rem;margin-bottom:1rem}
+.bb{background:var(--c2);border:2px solid var(--br);border-radius:13px;
+  padding:1.1rem .5rem;text-align:center;cursor:pointer;
+  transition:all .2s;color:var(--ink2);font-family:'Tajawal',sans-serif;font-size:.87rem;font-weight:700;}
+.bb .bi{font-size:1.8rem;display:block;margin-bottom:.4rem}
+.bb:hover{border-color:rgba(242,184,48,.35);background:var(--c3);transform:translateY(-1px)}
+.bb.sel{border-color:var(--gold);background:rgba(242,184,48,.09);color:var(--gold);
+  box-shadow:0 0 0 3px rgba(242,184,48,.1),0 4px 20px rgba(242,184,48,.08)}
+
+.auth-switch{text-align:center;font-size:.85rem;color:var(--ink2);margin-top:1.3rem}
+.auth-switch a{color:var(--gold);text-decoration:none;font-weight:700;cursor:pointer}
+.auth-switch a:hover{text-decoration:underline}
+.auth-or{display:flex;align-items:center;gap:.6rem;margin:.85rem 0;color:var(--ink3);font-size:.72rem}
+.auth-or::before,.auth-or::after{content:'';flex:1;height:1px;background:var(--br)}
+
+.card{background:var(--c1);border:1px solid var(--br);border-radius:var(--r);padding:1.35rem;
+  margin-bottom:.9rem;box-shadow:0 6px 32px rgba(0,0,0,.35);position:relative;overflow:hidden;
+  animation:fadeUp .45s ease both;}
+.card::before{content:'';position:absolute;top:0;right:0;width:130px;height:130px;
+  background:radial-gradient(circle,rgba(242,184,48,.04) 0%,transparent 70%);pointer-events:none;}
+@keyframes fadeUp{from{opacity:0;transform:translateY(18px)}to{opacity:1;transform:translateY(0)}}
+.sec-ttl{font-size:.88rem;font-weight:800;color:var(--gold);margin-bottom:1rem;
+  display:flex;align-items:center;gap:.55rem;letter-spacing:.2px}
+.sec-ttl::after{content:'';flex:1;height:1px;background:linear-gradient(90deg,rgba(242,184,48,.2),transparent)}
+
+.hero{text-align:center;padding:2rem 1rem 1.4rem;animation:fadeUp .5s ease both}
+.h-icon{font-size:3.8rem;display:block;margin-bottom:.75rem;animation:float 3.5s ease-in-out infinite}
+.h-title{font-size:2rem;font-weight:900;line-height:1.2;
+  background:linear-gradient(145deg,var(--gold) 25%,rgba(255,255,255,.9));
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;margin-bottom:.5rem;}
+.h-sub{font-size:.87rem;color:var(--ink2);line-height:1.75;max-width:310px;margin:0 auto}
+
+input,select{width:100%;background:var(--c2);border:1.5px solid var(--br);border-radius:10px;
+  color:var(--ink);font-family:'Tajawal',sans-serif;font-size:.92rem;padding:.82rem 1rem;
+  margin-bottom:.7rem;outline:none;transition:border-color .2s,box-shadow .2s;direction:rtl;appearance:none;}
+input:focus,select:focus{border-color:rgba(var(--accent-rgb),.45);box-shadow:0 0 0 3px rgba(var(--accent-rgb),.07)}
+input::placeholder{color:var(--ink3)}
+select option{background:var(--c2)}
+.field-label{font-size:.78rem;color:var(--ink2);font-weight:600;margin-bottom:.35rem;display:block}
+
+.code-wrap{position:relative;margin-bottom:.7rem}
+.code-wrap input{padding-right:5.8rem;font-family:'IBM Plex Mono',monospace;letter-spacing:.5px;direction:ltr;text-align:left;margin-bottom:0}
+.code-pre{position:absolute;right:1rem;top:50%;transform:translateY(-50%);
+  font-family:'IBM Plex Mono',monospace;font-size:.82rem;font-weight:600;color:var(--gold);pointer-events:none;letter-spacing:.5px}
+
+.btn{display:flex;align-items:center;justify-content:center;gap:.45rem;width:100%;
+  padding:.88rem 1.4rem;border-radius:11px;border:none;font-family:'Tajawal',sans-serif;
+  font-size:.97rem;font-weight:800;cursor:pointer;transition:all .18s;margin-bottom:.5rem;letter-spacing:.15px;}
+.btn:disabled{opacity:.6;cursor:not-allowed}
+.btn-p{background:linear-gradient(135deg,var(--accent),var(--accent-dark));color:#06080f}
+.btn-p:hover:not(:disabled){transform:translateY(-2px);box-shadow:0 8px 24px rgba(var(--accent-rgb),.32)}
+.btn-p:active{transform:none}
+.btn-g{background:var(--c2);color:var(--ink2);border:1.5px solid var(--br);font-size:.88rem}
+.btn-g:hover{border-color:rgba(242,184,48,.3);color:var(--gold)}
+.btn-t{background:rgba(45,212,191,.09);color:var(--teal);border:1.5px solid rgba(45,212,191,.2)}
+.btn-t:hover{background:rgba(45,212,191,.16)}
+.btn-danger{background:rgba(248,113,113,.1);color:var(--red);border:1.5px solid rgba(248,113,113,.25);font-size:.85rem}
+.btn-danger:hover{background:rgba(248,113,113,.18)}
+.btn-study{background:linear-gradient(135deg,#22c55e,#16a34a);color:#fff;font-size:1.08rem;
+  padding:1.15rem;border-radius:14px;box-shadow:0 6px 22px rgba(34,197,94,.28);letter-spacing:.3px}
+.btn-study:hover:not(:disabled){transform:translateY(-2px);box-shadow:0 10px 28px rgba(34,197,94,.35)}
+.btn-study.running{background:linear-gradient(135deg,#ef4444,#b91c1c);
+  box-shadow:0 6px 22px rgba(239,68,68,.3);animation:pr 1.6s infinite}
+@keyframes pr{0%,100%{box-shadow:0 0 0 0 rgba(248,113,113,.4)}50%{box-shadow:0 0 0 10px rgba(248,113,113,0)}}
+
+.sq-hero{background:linear-gradient(135deg,rgba(242,184,48,.08),rgba(45,212,191,.04));
+  border:1px solid rgba(242,184,48,.15);border-radius:var(--r);padding:1.5rem 1.3rem;
+  text-align:center;margin-bottom:.9rem;position:relative;overflow:hidden;animation:fadeUp .4s ease both}
+.sq-hero::after{content:'';position:absolute;bottom:-30px;left:50%;transform:translateX(-50%);
+  width:220px;height:60px;background:radial-gradient(ellipse,rgba(242,184,48,.07) 0%,transparent 70%)}
+.sq-big{font-size:1.75rem;font-weight:900;color:var(--gold);margin-bottom:.3rem;line-height:1.2}
+.sq-meta{font-size:.75rem;color:var(--ink3);display:flex;align-items:center;justify-content:center;gap:.5rem}
+.dot{width:3px;height:3px;border-radius:50%;background:var(--ink3)}
+.code-pill{display:inline-flex;align-items:center;gap:.65rem;background:var(--c2);
+  border:1.5px dashed rgba(242,184,48,.25);border-radius:9px;padding:.5rem 1rem;margin:.75rem 0 .1rem}
+.cp-lbl{font-size:.68rem;color:var(--ink3)}
+.cp-val{font-family:'IBM Plex Mono',monospace;font-size:.92rem;font-weight:600;color:var(--gold);letter-spacing:.6px}
+.cp-btn{background:none;border:1px solid var(--br);color:var(--ink3);padding:.22rem .6rem;
+  border-radius:6px;font-family:'Tajawal',sans-serif;font-size:.72rem;cursor:pointer;transition:all .18s;
+  display:flex;align-items:center;gap:.3rem}
+.cp-btn:hover{border-color:var(--gold);color:var(--gold)}
+
+.s4{display:grid;grid-template-columns:1fr 1fr;gap:.7rem;margin-bottom:.9rem}
+.sbox{background:var(--c1);border:1px solid var(--br);border-radius:14px;padding:1rem;text-align:center;position:relative;overflow:hidden}
+.sbox::after{content:'';position:absolute;bottom:-18px;right:-18px;width:60px;height:60px;border-radius:50%;background:currentColor;opacity:.03;pointer-events:none}
+.sbox-icon{display:flex;justify-content:center;margin-bottom:.4rem}
+.sbox-icon svg{width:20px;height:20px;opacity:.8}
+.sv{font-size:1.55rem;font-weight:700;font-family:'IBM Plex Mono',monospace;color:var(--gold);line-height:1;margin-bottom:.25rem}
+.sl{font-size:.67rem;color:var(--ink3);font-weight:500}
+.sbox.tc .sv{color:var(--teal)} .sbox.bc .sv{color:var(--blue)} .sbox.gc .sv{color:var(--green)}
+
+.tabs{display:grid;grid-template-columns:repeat(5,1fr);gap:.25rem;background:var(--c1);
+  border:1px solid var(--br);border-radius:14px;padding:.3rem;margin-bottom:.9rem}
+.tab{padding:.5rem .15rem;border-radius:10px;text-align:center;font-size:.58rem;font-weight:700;
+  cursor:pointer;transition:all .2s;color:var(--ink3);border:none;background:none;
+  font-family:'Tajawal',sans-serif;display:flex;flex-direction:column;align-items:center;gap:.22rem;line-height:1}
+.tab svg{width:16px;height:16px;transition:all .2s;flex-shrink:0}
+.tab.on{background:var(--c2);color:var(--gold);box-shadow:0 2px 10px rgba(0,0,0,.3)}
+.tab.on svg{stroke:var(--gold)}
+
+/* ══ CHALLENGES ══ */
+.challenge-card{background:linear-gradient(135deg, rgba(15,22,36,.85), rgba(22,32,53,.85));
+  border:1.5px solid var(--br);border-radius:11px;padding:1.1rem;margin-bottom:.7rem;
+  animation:fadeUp .35s ease both;position:relative;overflow:hidden;}
+.challenge-card.winning{border-color:rgba(74,222,128,.35)}
+.challenge-card.losing{border-color:rgba(248,113,113,.35)}
+
+.chal-hd{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:.8rem;gap:.5rem;flex-wrap:wrap}
+.chal-teams{display:flex;align-items:center;gap:.4rem;flex:1;min-width:0;font-size:.8rem}
+.ct-badge{font-size:1.3rem;flex-shrink:0}
+.ct-name{font-weight:700;color:var(--ink);flex-shrink:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.ct-vs{font-weight:900;color:var(--ink3);font-size:.7rem;margin:0 .2rem}
+.chal-status{font-size:.7rem;font-weight:700;padding:.4rem .7rem;border-radius:16px;white-space:nowrap;flex-shrink:0;
+  background:rgba(251,191,36,.12);color:var(--amber);border:1px solid rgba(251,191,36,.25)}
+
+.chal-score{display:flex;justify-content:space-between;align-items:center;gap:.6rem;margin-bottom:.8rem;
+  background:var(--c3);border-radius:9px;padding:.8rem;border:1px solid rgba(255,255,255,.03)}
+.cs-unit{text-align:center}
+.cs-pts{font-size:1.4rem;font-weight:900;font-family:'IBM Plex Mono',monospace;color:var(--gold);line-height:1}
+.cs-lbl{font-size:.65rem;color:var(--ink3);margin-top:.15rem}
+.cs-diff{flex:1;text-align:center;font-size:.95rem;font-weight:800;
+  padding:.5rem;border-radius:8px;background:rgba(248,113,113,.1);color:var(--red);}
+.cs-diff.leading{background:rgba(74,222,128,.1);color:var(--green)}
+
+.chal-time{font-size:.8rem;color:var(--ink2);margin-bottom:.6rem;display:flex;align-items:center;gap:.3rem}
+
+.btn-action{background:linear-gradient(135deg,var(--green),#16a34a);color:#fff;font-size:.75rem;
+  padding:.5rem 1rem;border-radius:8px;border:none;cursor:pointer;font-family:'Tajawal',sans-serif;font-weight:700;
+  width:100%;transition:all .18s;}
+.btn-action:hover{transform:translateY(-2px);box-shadow:0 4px 12px rgba(74,222,128,.3)}
+
+.session-modal{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.65);
+  display:none;align-items:center;justify-content:center;z-index:999;backdrop-filter:blur(6px)}
+.session-content{background:var(--c1);border-radius:var(--r);padding:1.8rem;max-width:380px;
+  width:90%;animation:fadeUp .3s ease both}
+.session-hd{font-size:1.15rem;font-weight:900;color:var(--gold);margin-bottom:1.2rem;text-align:center;
+  display:flex;justify-content:space-between;align-items:center;}
+.session-field{margin-bottom:1.2rem}
+.session-field label{display:block;font-size:.8rem;font-weight:700;color:var(--ink2);margin-bottom:.5rem}
+.session-slider{width:100%;height:6px;border-radius:3px;background:var(--c2);outline:none;
+  -webkit-appearance:none;appearance:none;cursor:pointer;margin-bottom:0;padding:0;border:none;}
+.session-slider::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:20px;height:20px;
+  border-radius:50%;background:linear-gradient(135deg,var(--gold),var(--gd));cursor:pointer;box-shadow:0 0 10px rgba(242,184,48,.4)}
+.session-slider::-moz-range-thumb{width:20px;height:20px;border-radius:50%;background:linear-gradient(135deg,var(--gold),var(--gd));cursor:pointer;border:none;box-shadow:0 0 10px rgba(242,184,48,.4)}
+.session-value{text-align:center;font-size:1.2rem;font-weight:800;color:var(--gold);font-family:'IBM Plex Mono',monospace;margin-top:.6rem}
+
+#session-info{display:none;background:var(--c2);border:1px solid rgba(242,184,48,.15);border-radius:13px;
+  padding:1.2rem;margin-bottom:1rem;animation:fadeUp .3s ease both}
+.session-stat{display:flex;justify-content:space-between;align-items:center;margin-bottom:.8rem}
+.session-stat-label{font-size:.85rem;color:var(--ink2);font-weight:600}
+.session-stat-value{font-size:1.1rem;font-weight:800;color:var(--gold);font-family:'IBM Plex Mono',monospace}
+.session-progress{margin-top:1rem}
+.session-progress-label{font-size:.75rem;color:var(--ink3);margin-bottom:.5rem;display:flex;justify-content:space-between}
+.session-progress-bar{width:100%;height:8px;background:var(--c3);border-radius:4px;overflow:hidden}
+.session-progress-fill{height:100%;background:linear-gradient(90deg,var(--gd),var(--gold));border-radius:4px;width:0%;transition:width .3s ease}
+
+.challenge-modal{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.65);
+  display:none;align-items:center;justify-content:center;z-index:999;backdrop-filter:blur(6px)}
+.modal-content{background:var(--c1);border-radius:var(--r);padding:1.5rem;max-width:380px;
+  width:90%;max-height:70vh;overflow-y:auto}
+.modal-hd{font-size:1.1rem;font-weight:900;color:var(--gold);margin-bottom:1rem;display:flex;justify-content:space-between;align-items:center}
+.modal-close{background:none;border:none;color:var(--ink3);font-size:1.3rem;cursor:pointer}
+.opp-card{background:var(--c2);border:1px solid var(--br);border-radius:11px;
+  padding:.9rem;margin-bottom:.6rem;animation:fadeUp .3s ease both}
+.opp-nm{font-size:.88rem;font-weight:700;color:var(--ink);margin-bottom:.4rem}
+.opp-info{font-size:.75rem;color:var(--ink3);margin-bottom:.6rem}
+
+.mc{display:flex;align-items:center;gap:.8rem;background:var(--c2);border:1px solid var(--br);
+  border-radius:12px;padding:.9rem;margin-bottom:.55rem;transition:border-color .2s,transform .15s;animation:fadeUp .4s ease both}
+.mc:hover{transform:translateY(-1px)}
+.mc.is-me{border-color:rgba(242,184,48,.36);background:rgba(242,184,48,.04)}
+.mc-av{width:40px;height:40px;border-radius:50%;flex-shrink:0;
+  background:linear-gradient(135deg,var(--gold),var(--gd));color:#06080f;font-size:1.15rem;font-weight:900;
+  display:flex;align-items:center;justify-content:center}
+.mc-body{flex:1;min-width:0}
+.mc-name{font-size:.9rem;font-weight:700;display:flex;align-items:center;gap:.4rem;flex-wrap:wrap;}
+.me-chip{font-size:.62rem;background:rgba(242,184,48,.14);color:var(--gold);padding:.1rem .45rem;
+  border-radius:20px;border:1px solid rgba(242,184,48,.28);flex-shrink:0}
+.rank-chip{font-size:.6rem;background:rgba(96,165,250,.12);color:var(--blue);padding:.1rem .4rem;
+  border-radius:20px;border:1px solid rgba(96,165,250,.22);flex-shrink:0;white-space:nowrap;}
+.mc-sub{font-size:.7rem;color:var(--ink3);margin:.18rem 0 .45rem}
+.mc-bar{height:3px;background:var(--c3);border-radius:4px;overflow:hidden}
+.mc-fill{height:100%;background:linear-gradient(90deg,var(--gd),var(--gold));border-radius:4px;transition:width .7s ease}
+.mc-r{text-align:left;flex-shrink:0;display:flex;flex-direction:column;align-items:flex-end;gap:.3rem;}
+.mc-pts{font-size:.82rem;font-weight:700;color:var(--gold);font-family:'IBM Plex Mono',monospace}
+.mc-hrs{font-size:.7rem;color:var(--ink3)}
+.kick-btn{background:rgba(248,113,113,.1);border:1px solid rgba(248,113,113,.25);color:var(--red);
+  font-size:.65rem;padding:.2rem .5rem;border-radius:6px;cursor:pointer;font-family:'Tajawal',sans-serif;
+  font-weight:700;white-space:nowrap;transition:all .15s;}
+.kick-btn:hover{background:rgba(248,113,113,.22)}
+
+.lb-row{display:flex;align-items:center;gap:.7rem;background:var(--c2);border:1px solid var(--br);
+  border-radius:11px;padding:.85rem 1rem;margin-bottom:.5rem;transition:border-color .2s}
+.lb-row.mine{border-color:rgba(242,184,48,.4);background:rgba(242,184,48,.05)}
+.lb-pos{font-size:1.1rem;width:28px;text-align:center;flex-shrink:0}
+.lb-mid{flex:1;min-width:0}
+.lb-nm{font-size:.88rem;font-weight:700;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.lb-ct{font-size:.7rem;color:var(--ink3)}
+.lb-end{text-align:left;flex-shrink:0}
+.lb-p{display:block;font-size:.8rem;font-weight:700;color:var(--gold);font-family:'IBM Plex Mono',monospace}
+.lb-h{display:block;font-size:.7rem;color:var(--ink3);margin-top:.15rem}
+.lb-empty{text-align:center;color:var(--ink3);font-size:.85rem;padding:2rem}
+
+.avail-sq{background:var(--c2);border:1px solid rgba(45,212,191,.2);border-radius:11px;
+  padding:.9rem;margin-bottom:.6rem;animation:fadeUp .3s ease both}
+.as-hd{display:flex;align-items:center;gap:.5rem;margin-bottom:.5rem}
+.as-badge{font-size:1.3rem}
+.as-nm{font-size:.88rem;font-weight:700;color:var(--ink)}
+.as-info{display:flex;justify-content:space-between;font-size:.75rem;color:var(--ink3);margin-bottom:.6rem}
+
+#timer-box{display:none;flex-direction:column;align-items:center;justify-content:center;
+  background:linear-gradient(160deg,rgba(10,18,32,.98),rgba(16,26,44,.98));
+  border-radius:22px;padding:1.8rem 1.2rem 1.4rem;margin-bottom:.8rem;
+  border:1px solid rgba(242,184,48,.22);position:relative;overflow:hidden;
+  box-shadow:0 0 50px rgba(242,184,48,.09), 0 20px 60px rgba(0,0,0,.5),inset 0 0 40px rgba(242,184,48,.04);}
+#timer-box::before{content:'';position:absolute;inset:0;
+  background:radial-gradient(ellipse at 50% 20%,rgba(242,184,48,.11) 0%,transparent 60%);pointer-events:none}
+#timer-box::after{content:'';position:absolute;bottom:0;left:0;right:0;height:1px;
+  background:linear-gradient(90deg,transparent,rgba(242,184,48,.3),transparent)}
+.timer-ring-wrap{position:relative;display:flex;align-items:center;justify-content:center;
+  width:100%;margin-bottom:.9rem}
+.timer-pulse-ring{position:absolute;width:160px;height:160px;border-radius:50%;
+  border:2px solid rgba(242,184,48,.12);animation:timerPulse 2.2s ease-in-out infinite;pointer-events:none}
+@keyframes timerPulse{0%,100%{transform:scale(1);opacity:.5}50%{transform:scale(1.06);opacity:.15}}
+.timer-inner{display:flex;flex-direction:column;align-items:center;gap:.25rem;position:relative;z-index:1}
+.timer-label-top{font-size:.72rem;font-weight:700;color:var(--gold);letter-spacing:.8px;
+  text-transform:uppercase;opacity:.8;font-family:'Tajawal',sans-serif}
+.timer-label-bot{font-size:.65rem;color:var(--ink3);letter-spacing:.5px;font-family:'Tajawal',sans-serif}
+#clock{font-family:'IBM Plex Mono',monospace;font-size:clamp(2.4rem,9vw,3.2rem);font-weight:600;color:var(--gold);
+  letter-spacing:5px;text-shadow:0 0 30px rgba(242,184,48,.55),0 0 70px rgba(242,184,48,.18),0 0 4px rgba(242,184,48,.9);
+  position:relative;z-index:1;line-height:1.1}
+.timer-controls{display:flex;align-items:center;justify-content:center;gap:.8rem;position:relative;z-index:1}
+.timer-pause-btn{width:48px;height:48px;border-radius:50%;border:2px solid rgba(242,184,48,.35);
+  background:rgba(242,184,48,.1);color:var(--gold);font-size:1.15rem;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;transition:all .2s;
+  box-shadow:0 0 14px rgba(242,184,48,.1)}
+.timer-pause-btn:hover{background:rgba(242,184,48,.2);border-color:var(--gold);
+  box-shadow:0 0 20px rgba(242,184,48,.25);transform:scale(1.08)}
+.timer-pause-btn:not(.paused-state){background:rgba(45,212,191,.1);border-color:rgba(45,212,191,.35);color:var(--teal)}
+.timer-pause-btn:not(.paused-state):hover{background:rgba(45,212,191,.2);border-color:var(--teal)}
+.pts-rule{font-size:.74rem;color:var(--ink3);text-align:center;margin-top:.5rem;
+  display:flex;align-items:center;justify-content:center;gap:.4rem}
+.pts-rule::before,.pts-rule::after{content:'';flex:1;height:1px;background:var(--br)}
+.tip-box{background:rgba(45,212,191,.05);border:1px solid rgba(45,212,191,.12);
+  border-radius:11px;padding:1rem;margin-top:.5rem}
+.tip-ttl{font-size:.8rem;font-weight:800;color:var(--teal);margin-bottom:.6rem}
+.tip-li{font-size:.78rem;color:var(--ink2);margin-bottom:.35rem;display:flex;gap:.4rem;align-items:flex-start;line-height:1.5}
+
+.lw{background:linear-gradient(135deg,rgba(242,184,48,.07),rgba(96,165,250,.04));
+  border:1px solid rgba(242,184,48,.12);border-radius:var(--r);padding:1.3rem;
+  text-align:center;margin-bottom:.9rem}
+.lw-n{font-size:1.3rem;font-weight:900;color:var(--gold);margin-bottom:.25rem}
+.lw-b{font-size:.8rem;color:var(--ink2)}
+.form-block{background:var(--c2);border:1px solid var(--br);border-radius:11px;padding:1.1rem;margin-top:.6rem;animation:fadeUp .3s ease both}
+.form-ttl{font-size:.85rem;font-weight:800;color:var(--ink2);margin-bottom:.75rem}
+
+#pts-flash{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%) scale(.4);
+  font-size:2.8rem;font-weight:900;color:var(--gold);pointer-events:none;opacity:0;z-index:999;
+  transition:all .35s cubic-bezier(.34,1.56,.64,1);font-family:'IBM Plex Mono',monospace;
+  text-shadow:0 0 40px rgba(242,184,48,.7)}
+#pts-flash.on{opacity:1;transform:translate(-50%,-65%) scale(1)}
+.toast{position:fixed;bottom:1.6rem;left:50%;transform:translateX(-50%) translateY(90px);
+  background:var(--c1);border:1px solid var(--br);color:var(--ink);padding:.7rem 1.5rem;
+  border-radius:40px;font-size:.88rem;font-weight:700;z-index:800;
+  max-width:85vw;text-align:center;white-space:normal;word-break:break-word;
+  box-shadow:0 8px 36px rgba(0,0,0,.55);transition:transform .3s cubic-bezier(.34,1.56,.64,1)}
+.toast.show{transform:translateX(-50%) translateY(0)}
+.toast.t-ok  {border-color:rgba(74,222,128,.35);color:var(--green)}
+.toast.t-err {border-color:rgba(248,113,113,.35);color:var(--red)}
+.toast.t-warn{border-color:rgba(251,191,36,.35) ;color:var(--amber)}
+
+.rank-tabs{display:grid;grid-template-columns:1fr 1fr;gap:.3rem;background:var(--c1);
+  border:1px solid var(--br);border-radius:13px;padding:.3rem;margin-bottom:.9rem}
+.rank-tab{padding:.55rem;border-radius:9px;text-align:center;font-size:.82rem;font-weight:700;
+  cursor:pointer;transition:all .18s;color:var(--ink3);border:none;background:none;font-family:'Tajawal',sans-serif}
+.rank-tab.on{background:var(--c2);color:var(--gold);box-shadow:0 2px 10px rgba(0,0,0,.3)}
+
+.empty-msg{text-align:center;color:var(--ink3);padding:1.2rem;font-size:.85rem}
+
+.goal-item{display:flex;align-items:center;gap:.7rem;background:var(--c2);border:1px solid var(--br);
+  border-radius:10px;padding:.75rem .9rem;margin-bottom:.45rem;transition:all .2s;animation:fadeUp .3s ease both}
+.goal-item.done{opacity:.55;border-color:rgba(74,222,128,.2);background:rgba(74,222,128,.03)}
+.goal-item.done .goal-text{text-decoration:line-through;color:var(--ink3)}
+.goal-check{font-size:1.2rem;cursor:pointer;flex-shrink:0;transition:transform .15s}
+.goal-check:hover{transform:scale(1.2)}
+.goal-text{flex:1;font-size:.88rem;color:var(--ink);line-height:1.4;word-break:break-word}
+.goal-del{background:none;border:none;color:var(--ink3);font-size:.85rem;cursor:pointer;
+  padding:.2rem .4rem;border-radius:5px;flex-shrink:0;transition:all .15s;font-family:'Tajawal',sans-serif}
+.goal-del:hover{color:var(--red);background:rgba(248,113,113,.1)}
+
+@media(max-width:380px){
+  .h-title{font-size:1.7rem} .sq-big{font-size:1.4rem}
+  #clock{font-size:2.2rem;letter-spacing:3px} .sv{font-size:1.3rem}
+  .auth-title{font-size:1.5rem}
+  .tabs{grid-template-columns:repeat(5,1fr)}
+  .tab{font-size:.53rem;padding:.45rem .1rem}
+  .tab svg{width:14px;height:14px}
+  .chal-teams{font-size:.7rem}
+  .s4{grid-template-columns:1fr 1fr}
+  .stats-grid{grid-template-columns:1fr 1fr}
+  .wrap{padding:.8rem .6rem 6rem}
+  .card{padding:1rem}
+  .sq-hero{padding:1.2rem 1rem}
+}
+
+.study-mode-row{display:grid;grid-template-columns:1fr 1fr;gap:.5rem;margin-bottom:.9rem}
+.smode-btn{background:var(--c1);border:1.5px solid var(--br);border-radius:12px;
+  color:var(--ink2);font-family:'Tajawal',sans-serif;font-size:.87rem;font-weight:700;
+  padding:.8rem;cursor:pointer;transition:all .2s;display:flex;align-items:center;justify-content:center;gap:.45rem}
+.smode-btn svg{flex-shrink:0;transition:stroke .2s}
+.smode-btn.on{background:rgba(242,184,48,.1);border-color:rgba(242,184,48,.45);color:var(--gold)}
+.smode-btn.on svg{stroke:var(--gold)}
+
+/* ══ POMODORO ══ */
+.pomo-ring-wrap{position:relative;width:180px;height:180px;margin:0 auto 1.2rem}
+.pomo-ring{width:100%;height:100%;transform:rotate(-90deg)}
+.pomo-track{fill:none;stroke:var(--c3);stroke-width:8}
+.pomo-fill{fill:none;stroke:var(--gold);stroke-width:8;stroke-linecap:round;
+  stroke-dasharray:326.7;stroke-dashoffset:0;transition:stroke-dashoffset .8s ease, stroke .4s}
+.pomo-fill.break-mode{stroke:var(--teal)}
+.pomo-center{position:absolute;inset:0;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;gap:.15rem}
+.pomo-phase-icon{font-size:1.6rem;line-height:1}
+.pomo-time{font-family:'IBM Plex Mono',monospace;font-size:2rem;font-weight:600;
+  color:var(--ink);letter-spacing:1px;line-height:1}
+.pomo-phase-lbl{font-size:.72rem;color:var(--ink3);font-weight:600;letter-spacing:.5px;text-transform:uppercase}
+
+.pomo-rounds{display:flex;justify-content:center;gap:.45rem;margin-bottom:1.1rem;flex-wrap:wrap}
+.pomo-dot{width:22px;height:22px;border-radius:50%;border:2px solid var(--br);
+  background:var(--c2);font-size:.75rem;display:flex;align-items:center;justify-content:center;
+  transition:all .3s}
+.pomo-dot.done{background:var(--gold);border-color:var(--gold);box-shadow:0 0 8px rgba(242,184,48,.4)}
+.pomo-dot.active{border-color:var(--gold);background:rgba(242,184,48,.15);animation:pr 1.4s infinite}
+
+.pomo-controls{display:flex;align-items:center;justify-content:center;gap:1rem;margin-bottom:1.2rem}
+.pomo-btn{border:none;cursor:pointer;border-radius:50%;display:flex;align-items:center;
+  justify-content:center;font-family:'Tajawal',sans-serif;transition:all .18s}
+.pomo-main{width:62px;height:62px;font-size:1.5rem;
+  background:linear-gradient(135deg,var(--gold),var(--gd));color:#06080f;
+  box-shadow:0 4px 18px rgba(242,184,48,.32)}
+.pomo-main:hover{transform:scale(1.06);box-shadow:0 6px 22px rgba(242,184,48,.45)}
+.pomo-main.running{background:linear-gradient(135deg,var(--red),#b91c1c);
+  box-shadow:0 4px 18px rgba(248,113,113,.32);animation:pr 1.6s infinite}
+.pomo-reset,.pomo-skip{width:46px;height:46px;font-size:1.1rem;
+  background:var(--c2);color:var(--ink2);border:1.5px solid var(--br)}
+.pomo-reset:hover,.pomo-skip:hover{border-color:rgba(242,184,48,.3);color:var(--gold)}
+
+.pomo-settings{background:var(--c2);border:1px solid var(--br);border-radius:12px;
+  padding:.9rem 1rem;margin-bottom:1rem;display:flex;flex-direction:column;gap:.7rem}
+.pomo-set-row{display:flex;align-items:center;gap:.7rem}
+.pomo-set-lbl{font-size:.82rem;color:var(--ink2);font-weight:600;flex:1;min-width:60px}
+.pomo-set-ctrl{display:flex;align-items:center;gap:.5rem}
+.pomo-set-ctrl button{width:28px;height:28px;border-radius:7px;border:1.5px solid var(--br);
+  background:var(--c1);color:var(--gold);font-size:1rem;font-weight:700;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;transition:all .15s}
+.pomo-set-ctrl button:hover{background:rgba(242,184,48,.1)}
+.pomo-set-ctrl span{font-family:'IBM Plex Mono',monospace;font-size:.9rem;
+  color:var(--ink);font-weight:600;min-width:22px;text-align:center}
+.pomo-set-unit{font-size:.75rem;color:var(--ink3)}
+
+/* ══ إحصائيات ══ */
+.stats-period-row{display:grid;grid-template-columns:repeat(4,1fr);gap:.3rem;background:var(--c1);
+  border:1px solid var(--br);border-radius:13px;padding:.3rem;margin-bottom:.9rem}
+.stats-period-btn{padding:.55rem .3rem;border-radius:9px;text-align:center;font-size:.78rem;font-weight:700;
+  cursor:pointer;transition:all .18s;color:var(--ink3);border:none;background:none;font-family:'Tajawal',sans-serif}
+.stats-period-btn.on{background:var(--c2);color:var(--gold);box-shadow:0 2px 10px rgba(0,0,0,.3)}
+.stats-loading{text-align:center;color:var(--ink3);padding:2rem;font-size:.85rem}
+.stats-grid{display:grid;grid-template-columns:1fr 1fr;gap:.7rem;margin-bottom:.9rem}
+.stat-card{background:var(--c1);border:1px solid var(--br);border-radius:14px;padding:1.1rem;text-align:center;
+  animation:fadeUp .4s ease both;position:relative;overflow:hidden}
+.stat-card::before{content:'';position:absolute;bottom:-20px;left:50%;transform:translateX(-50%);
+  width:80px;height:80px;border-radius:50%;background:currentColor;opacity:.03;pointer-events:none}
+.stat-icon{display:flex;justify-content:center;margin-bottom:.45rem}
+.stat-icon svg{width:22px;height:22px;opacity:.85}
+.stat-card.gold .stat-val{color:var(--gold)}
+.stat-card.blue .stat-val{color:var(--blue)}
+.stat-card.teal .stat-val{color:var(--teal)}
+.stat-card.green .stat-val{color:var(--green)}
+.stat-val{font-size:1.6rem;font-weight:700;font-family:'IBM Plex Mono',monospace;line-height:1;margin-bottom:.3rem}
+.stat-lbl{font-size:.68rem;color:var(--ink3);font-weight:500}
+.subj-stat-row{display:flex;align-items:center;gap:.6rem;margin-bottom:.65rem}
+.subj-stat-name{font-size:.78rem;color:var(--ink2);font-weight:600;min-width:80px;flex-shrink:0;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.subj-stat-bar-wrap{flex:1;height:8px;background:var(--c3);border-radius:4px;overflow:hidden}
+.subj-stat-bar{height:100%;background:linear-gradient(90deg,var(--gd),var(--gold));border-radius:4px;
+  transition:width .6s ease;min-width:0}
+.subj-stat-time{font-size:.72rem;color:var(--ink3);font-family:'IBM Plex Mono',monospace;
+  min-width:32px;text-align:left;flex-shrink:0}
+.day-stat-row{display:flex;align-items:center;gap:.6rem;margin-bottom:.55rem}
+.day-stat-name{font-size:.75rem;color:var(--ink2);font-weight:600;min-width:50px;flex-shrink:0}
+.day-bar{background:linear-gradient(90deg,rgba(45,212,191,.7),var(--teal)) !important}
+.badge-row{display:flex;align-items:center;gap:.8rem;background:var(--c2);border:1px solid var(--br);
+  border-radius:10px;padding:.7rem .9rem;margin-bottom:.45rem;animation:fadeUp .3s ease both}
+.badge-icon{font-size:1.5rem;flex-shrink:0}
+.badge-title{font-size:.85rem;font-weight:700;color:var(--gold)}
+.badge-desc{font-size:.72rem;color:var(--ink3);margin-top:.1rem}
+
+</style>
+
+<style>
+/* ══ البانر الإعلاني المتحرك ══ */
+.ad-banner{
+  width:100%;overflow:hidden;position:relative;z-index:400;
+  background:#07090f;border-bottom:1px solid rgba(var(--accent-rgb),.18);
+}
+
+/* ── شريط الإعلان المتحرك ── */
+.ad-scroll-bar{
+  padding:.52rem 0;background:linear-gradient(90deg,
+    rgba(var(--accent-rgb),.08),rgba(var(--accent-rgb),.14),rgba(var(--accent-rgb),.08));
+  overflow:hidden;cursor:pointer;
+}
+.ad-track{
+  display:flex;align-items:center;gap:0;
+  animation:scrollRTL 22s linear infinite;
+  white-space:nowrap;width:max-content;
+}
+.ad-scroll-bar:hover .ad-track{animation-play-state:paused}
+@keyframes scrollRTL{0%{transform:translateX(0)}100%{transform:translateX(-50%)}}
+.ad-item{
+  display:inline-flex;align-items:center;gap:.5rem;
+  padding:0 2rem;font-size:.75rem;font-weight:700;
+  color:var(--ink2);font-family:'Tajawal',sans-serif;
+}
+.ad-item .hl{color:var(--accent);font-weight:900}
+.ad-sep{color:rgba(var(--accent-rgb),.35);margin:0 .5rem}
+
+/* ══ مودال المزاج ══ */
+.mood-modal-overlay{
+  position:fixed;inset:0;z-index:999;
+  background:rgba(0,0,0,.7);backdrop-filter:blur(6px);
+  display:flex;align-items:flex-end;justify-content:center;
+  opacity:0;pointer-events:none;transition:opacity .25s;
+}
+.mood-modal-overlay.open{opacity:1;pointer-events:all;}
+.mood-modal-box{
+  background:var(--c1);border:1px solid var(--br);
+  border-radius:var(--r) var(--r) 0 0;
+  padding:1.4rem 1.2rem 2rem;width:100%;max-width:480px;
+  transform:translateY(30px);transition:transform .3s ease;
+}
+.mood-modal-overlay.open .mood-modal-box{transform:translateY(0);}
+.mood-modal-hd{
+  display:flex;justify-content:space-between;align-items:center;
+  font-weight:700;font-size:1rem;color:var(--ink);margin-bottom:.3rem;
+}
+.mood-subtitle{font-size:.8rem;color:var(--ink3);margin-bottom:1rem;text-align:center;}
+.mood-btns-row{
+  display:flex;gap:.5rem;justify-content:center;margin-bottom:.8rem;flex-wrap:wrap;
+}
+.mood-btn{
+  display:flex;flex-direction:column;align-items:center;gap:.25rem;
+  background:var(--c2);border:2px solid var(--br);border-radius:12px;
+  padding:.7rem .6rem;cursor:pointer;transition:all .2s;min-width:56px;
+}
+.mood-btn:hover{border-color:var(--accent);transform:translateY(-2px);}
+.mood-btn.selected{
+  border-color:var(--accent);background:rgba(var(--accent-rgb),.12);
+  transform:translateY(-3px);box-shadow:0 4px 16px rgba(var(--accent-rgb),.2);
+}
+.mood-emoji{font-size:1.6rem;line-height:1;}
+.mood-lbl{font-size:.7rem;color:var(--ink2);font-family:'Tajawal',sans-serif;font-weight:600;}
+.mood-btn.selected .mood-lbl{color:var(--accent);}
+.mood-msg{
+  font-size:.82rem;font-weight:600;text-align:center;
+  padding:.7rem 1rem;background:var(--c2);border-radius:10px;
+  margin-bottom:.3rem;line-height:1.5;
+  animation:fadeIn .3s ease;
+}
+@keyframes fadeIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}</style>
+
+
 </head>
 <body>
 
-    <div class="container">
-        <div class="icon">📢</div>
-        
-        <h2>تنويه هام</h2>
-        
-        <p>
-            تم إيقاف العمل بنظام <strong>سكواد</strong>، والبدء بعمل <strong>ميزان دراسة</strong> ضمن باقة المنصة. 
-            يمكنك الاستفسار والاشتراك عبر التواصل معنا على التليكرام.
-        </p>
+<!-- ══ البانر الإعلاني ══ -->
 
-        <a href="https://t.me/mizaniq1" class="btn-telegram" target="_blank">
-            تواصل معنا عبر التليكرام @mizaniq1
-        </a>
+<div class="ad-banner">
+  <div class="ad-scroll-bar" onclick="window.open('https://mizaniq.online','_blank')">
+    <div class="ad-track">
+      <span class="ad-item">🎓 <span class="hl">هو السادس شيحتاج؟</span> اكيد يحتاج ميزان! <span class="ad-sep">✦</span> اشترك الآن على <span class="hl">mizaniq.online</span></span>
+      <span class="ad-item">📚 <span class="hl">أسئلة وزارية · اختبارات يومية · متابعة مستمرة</span> <span class="ad-sep">✦</span> منصة ميزان IQ للسادس الإعدادي</span>
+      <span class="ad-item">🚀 <span class="hl">انضم لآلاف الطلاب</span> اللي يستعدون للوزاري مع ميزان <span class="ad-sep">✦</span> سجّل مجاناً على <span class="hl">mizaniq.online</span></span>
+      <span class="ad-item">🎓 <span class="hl">هو السادس شيحتاج؟</span> اكيد يحتاج ميزان! <span class="ad-sep">✦</span> اشترك الآن على <span class="hl">mizaniq.online</span></span>
+      <span class="ad-item">📚 <span class="hl">أسئلة وزارية · اختبارات يومية · متابعة مستمرة</span> <span class="ad-sep">✦</span> منصة ميزان IQ للسادس الإعدادي</span>
+      <span class="ad-item">🚀 <span class="hl">انضم لآلاف الطلاب</span> اللي يستعدون للوزاري مع ميزان <span class="ad-sep">✦</span> سجّل مجاناً على <span class="hl">mizaniq.online</span></span>
     </div>
+  </div>
+</div>
+
+<header class="topbar">
+  <div class="brand">
+    <div class="brand-logo">
+      <svg viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" width="22" height="22">
+        <path d="M16 4L6 10v6c0 5.5 4.3 10.7 10 12 5.7-1.3 10-6.5 10-12v-6L16 4z" fill="rgba(6,8,15,0.6)" stroke="#06080f" stroke-width=".5"/>
+        <path d="M10 15.5h12M16 10v11" stroke="#06080f" stroke-width="2.2" stroke-linecap="round"/>
+        <circle cx="16" cy="15.5" r="2.5" fill="#06080f"/>
+      </svg>
+    </div>
+    <div>
+      <div class="brand-name">ميزان</div>
+      <div class="brand-tag">منصة التعليم التفاعلي</div>
+    </div>
+  </div>
+  <div style="display:flex;align-items:center;gap:.35rem;flex-shrink:0;min-width:0;overflow:hidden">
+    <button class="theme-btn" onclick="openThemeModal()" title="تغيير الثيم">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><circle cx="12" cy="12" r="3"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
+      ثيم
+    </button>
+    <div class="top-pill" id="top-user-info" style="display:none">مسجّل</div>
+    <button class="top-logout" id="logout-btn" onclick="doLogout()" style="display:none">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="13" height="13"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+      خروج
+    </button>
+    <div class="top-pill" id="top-pill-alt" style="display:none">Squads · السادس</div>
+  </div>
+</header>
+
+<!-- ══ مودال الثيمات ══ -->
+
+<div class="theme-modal" id="theme-modal" onclick="closeThemeModal(event)">
+  <div class="theme-sheet">
+    <div class="theme-sheet-hd">
+      <span>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" style="vertical-align:middle;margin-left:.3rem"><circle cx="12" cy="12" r="3"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
+        اختر ثيمك
+      </span>
+      <button class="theme-close" onclick="document.getElementById('theme-modal').classList.remove('open')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" width="18" height="18"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+    <div class="themes-grid">
+      <div class="theme-card" id="tc-gold" onclick="applyTheme('gold')">
+        <div class="theme-swatch" style="background:linear-gradient(135deg,#f2b830,#d4950a)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="#06080f" stroke-width="2.2" stroke-linecap="round" width="18" height="18"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+        </div>
+        <div class="theme-card-name">ذهبي</div>
+      </div>
+      <div class="theme-card" id="tc-purple" onclick="applyTheme('purple')">
+        <div class="theme-swatch" style="background:linear-gradient(135deg,#a78bfa,#7c3aed)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" width="18" height="18"><path d="M18 8h1a4 4 0 0 1 0 8h-1"/><path d="M2 8h16v9a4 4 0 0 1-4 4H6a4 4 0 0 1-4-4V8z"/><line x1="6" y1="1" x2="6" y2="4"/><line x1="10" y1="1" x2="10" y2="4"/><line x1="14" y1="1" x2="14" y2="4"/></svg>
+        </div>
+        <div class="theme-card-name">بنفسجي</div>
+      </div>
+      <div class="theme-card" id="tc-emerald" onclick="applyTheme('emerald')">
+        <div class="theme-swatch" style="background:linear-gradient(135deg,#34d399,#059669)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" width="18" height="18"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+        </div>
+        <div class="theme-card-name">زمردي</div>
+      </div>
+      <div class="theme-card" id="tc-rose" onclick="applyTheme('rose')">
+        <div class="theme-swatch" style="background:linear-gradient(135deg,#fb7185,#e11d48)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" width="18" height="18"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+        </div>
+        <div class="theme-card-name">وردي</div>
+      </div>
+      <div class="theme-card" id="tc-sky" onclick="applyTheme('sky')">
+        <div class="theme-swatch" style="background:linear-gradient(135deg,#38bdf8,#0284c7)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" width="18" height="18"><path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/></svg>
+        </div>
+        <div class="theme-card-name">سماوي</div>
+      </div>
+      <div class="theme-card" id="tc-light" onclick="applyTheme('light')">
+        <div class="theme-swatch" style="background:linear-gradient(135deg,#f8fafc,#e2e8f0);border:1px solid #cbd5e1">
+          <svg viewBox="0 0 24 24" fill="none" stroke="#64748b" stroke-width="2" stroke-linecap="round" width="18" height="18"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+        </div>
+        <div class="theme-card-name">فاتح</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+
+<!-- ══ AUTH ══ -->
+
+<div id="s-auth">
+  <div class="auth-container">
+    <div class="auth-hero">
+      <span class="auth-icon">🔐</span>
+      <div class="auth-title">ميزان Squads</div>
+      <p class="auth-sub">ادرس مع فريقك · تنافس مع الجميع</p>
+      <div class="auth-badges">
+        <span class="auth-badge">⚡ نقاط لحظية</span>
+        <span class="auth-badge">🔥 تحديات يومية</span>
+        <span class="auth-badge">📊 إحصائيات</span>
+        <span class="auth-badge">🍅 بومودورو</span>
+      </div>
+    </div>
+
+<div id="auth-login" class="auth-form">
+  <h3>🔓 تسجيل الدخول</h3>
+  <input id="login-code" type="text" placeholder="🔑 كودك الخاص" autocomplete="off" style="text-transform:uppercase;border-color:rgba(197,160,89,.5)"/>
+  <button id="login-btn" class="btn btn-p" onclick="doLogin()">🔓 دخول</button>
+  <div class="auth-switch">ليس لديك حساب؟ <a onclick="switchAuth('signup')">تسجيل جديد →</a></div>
+</div>
+
+<div id="auth-signup" class="auth-form" style="display:none">
+  <h3>🚀 تسجيل جديد</h3>
+  <input id="signup-code" type="text" placeholder="🔑 كود المنصة الخاص" autocomplete="off" style="text-transform:uppercase;border-color:rgba(197,160,89,.5)"/>
+  <div style="font-size:.72rem;color:var(--ink3);margin:-.35rem 0 .6rem;padding:0 .2rem">الكود تشتريه من المنصة — ما عندك كود؟ اشترك عبر <a href="https://t.me/mizaniq1" target="_blank" rel="noopener" style="color:var(--gold)">تيليغرام</a></div>
+  <input id="signup-name" type="text" placeholder="اسمك الكامل" autocomplete="name" maxlength="30"/>
+  <span class="field-label">اختر فرعك الدراسي</span>
+  <div class="branch-row">
+    <div class="bb" id="bb-signup-sci" onclick="pickSignupBranch('علمي')"><span class="bi">🔬</span>الفرع العلمي</div>
+    <div class="bb" id="bb-signup-lit" onclick="pickSignupBranch('أدبي')"><span class="bi">📖</span>الفرع الأدبي</div>
+  </div>
+  <input type="hidden" id="signup-branch" value="علمي"/>
+  <button id="signup-btn" class="btn btn-p" onclick="doSignup()">🚀 تسجيل</button>
+  <div class="auth-switch">هل لديك حساب بالفعل؟ <a onclick="switchAuth('login')">← دخول</a></div>
+</div>
+
+  </div>
+</div>
+
+<!-- ══ REGISTER ══ -->
+
+<div id="s-register" style="display:none">
+  <div class="hero">
+    <span class="h-icon">🛡️</span>
+    <div class="h-title">إكمال الملف الشخصي</div>
+    <p class="h-sub">أخبرنا عن نفسك حتى نبدأ</p>
+  </div>
+  <div class="card">
+    <div class="sec-ttl">📝 بيانات إضافية</div>
+    <input id="r-name" type="text" placeholder="اسمك الكامل" autocomplete="off" maxlength="30"/>
+    <span class="field-label">اختر فرعك الدراسي</span>
+    <div class="branch-row">
+      <div class="bb" id="bb-sci" onclick="pickBranch('علمي')"><span class="bi">🔬</span>الفرع العلمي</div>
+      <div class="bb" id="bb-lit" onclick="pickBranch('أدبي')"><span class="bi">📖</span>الفرع الأدبي</div>
+    </div>
+    <input type="hidden" id="r-branch" value="علمي"/>
+    <button class="btn btn-p" onclick="doRegister()">✅ إكمال</button>
+  </div>
+</div>
+
+<!-- ══ LOBBY ══ -->
+
+<div id="s-lobby" style="display:none">
+  <div class="lw">
+    <div class="lw-n" id="lobby-hello">مرحباً 👋</div>
+    <div class="lw-b" id="lobby-branch"></div>
+  </div>
+  <div class="card">
+    <div class="sec-ttl">⚔️ انضم أو أنشئ فريقاً</div>
+    <button class="btn btn-p" onclick="toggleForm('c')">🛡️ أنشئ فريقاً جديداً</button>
+    <button class="btn btn-t" onclick="toggleForm('j')">🔗 انضم بكود دعوة</button>
+    <button class="btn btn-g" onclick="toggleForm('av')">🌐 تصفح الفرق المتاحة</button>
+
+<div id="form-c" class="form-block" style="display:none">
+  <div class="form-ttl">🛡️ إنشاء فريق جديد</div>
+  <input id="c-name" type="text" placeholder="اسم فريقك (مثل: ليوث ميزان)" maxlength="22" autocomplete="off"/>
+  <button class="btn btn-p" onclick="doCreate()">إنشاء الفريق</button>
+</div>
+
+<div id="form-j" class="form-block" style="display:none">
+  <div class="form-ttl">🔗 الانضمام بكود</div>
+  <div class="code-wrap">
+    <span class="code-pre">mizan</span>
+    <input id="j-code" type="text" placeholder="XXXX" maxlength="9" autocomplete="off"/>
+  </div>
+  <button class="btn btn-t" onclick="doJoin()">انضم للفريق</button>
+</div>
+
+<div id="form-av" class="form-block" style="display:none">
+  <div class="form-ttl">🌐 فرق متاحة للانضمام</div>
+  <div id="available-squads-wrap"></div>
+</div>
+
+  </div>
+</div>
+
+<!-- ══ SQUAD ══ -->
+
+<div id="s-squad" style="display:none">
+
+  <div class="sq-hero">
+    <div class="sq-big" id="sq-name">…</div>
+    <div class="sq-meta">
+      <span id="sq-count">—</span>
+      <span class="dot"></span><span>السادس الإعدادي</span>
+      <span class="dot"></span><span>ميزان</span>
+    </div>
+    <div class="code-pill">
+      <div><div class="cp-lbl">كود الدعوة</div><div class="cp-val" id="sq-code">—</div></div>
+      <button class="cp-btn" onclick="copyCode()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+        نسخ
+      </button>
+    </div>
+  </div>
+
+  <div class="s4">
+    <div class="sbox">
+      <div class="sbox-icon" style="color:var(--gold)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+      </div>
+      <div class="sv" id="sq-pts">0</div><div class="sl">نقاط الفريق</div>
+    </div>
+    <div class="sbox tc">
+      <div class="sbox-icon" style="color:var(--teal)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+      </div>
+      <div class="sv" id="sq-hrs">0</div><div class="sl">ساعات الفريق</div>
+    </div>
+    <div class="sbox bc">
+      <div class="sbox-icon" style="color:var(--blue)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+      </div>
+      <div class="sv" id="my-pts">0</div><div class="sl">نقاطي</div>
+    </div>
+    <div class="sbox gc">
+      <div class="sbox-icon" style="color:var(--green)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+      </div>
+      <div class="sv" id="my-hrs">0</div><div class="sl">ساعاتي</div>
+    </div>
+  </div>
+
+  <div class="tabs" style="grid-template-columns:repeat(6,1fr)">
+    <button class="tab on" id="tab-team"       onclick="switchTab('team')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+      الفريق
+    </button>
+    <button class="tab" id="tab-study" onclick="switchTab('study')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>
+      دراسة
+    </button>
+    <button class="tab" id="tab-lectures" onclick="switchTab('lectures')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
+      محاضرات
+    </button>
+    <button class="tab" id="tab-rank" onclick="switchTab('rank')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
+      تصنيف
+    </button>
+    <button class="tab" id="tab-challenges" onclick="switchTab('challenges')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+      أهداف
+    </button>
+    <button class="tab" id="tab-stats" onclick="switchTab('stats')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+      إحصائياتي
+    </button>
+  </div>
+
+  <!-- TAB: TEAM -->
+
+  <div id="panel-team">
+    <div id="members-wrap"></div>
+    <button id="leave-squad-btn" class="btn btn-danger" onclick="leaveSquad()" style="display:none;margin-top:.5rem">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="15" height="15"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+      مغادرة الفريق
+    </button>
+  </div>
+
+  <!-- TAB: STUDY -->
+
+  <div id="panel-study" style="display:none">
+
+
+<!-- study mode switcher -->
+<div class="study-mode-row">
+  <button class="smode-btn on" id="smode-normal" onclick="switchStudyMode('normal')">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="16" height="16"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+    عداد حر
+  </button>
+  <button class="smode-btn" id="smode-pomo" onclick="switchStudyMode('pomo')">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="16" height="16"><path d="M18 8h1a4 4 0 0 1 0 8h-1"/><path d="M2 8h16v9a4 4 0 0 1-4 4H6a4 4 0 0 1-4-4V8z"/><line x1="6" y1="1" x2="6" y2="4"/><line x1="10" y1="1" x2="10" y2="4"/><line x1="14" y1="1" x2="14" y2="4"/></svg>
+    بومودورو
+  </button>
+</div>
+
+<!-- POMODORO PANEL -->
+<div id="pomo-panel" style="display:none">
+  <div class="card">
+    <div class="sec-ttl">🍅 بومودورو</div>
+    <div class="pomo-ring-wrap">
+      <svg class="pomo-ring" viewBox="0 0 120 120">
+        <circle class="pomo-track" cx="60" cy="60" r="52"/>
+        <circle class="pomo-fill"  cx="60" cy="60" r="52" id="pomo-arc"/>
+      </svg>
+      <div class="pomo-center">
+        <div class="pomo-phase-icon" id="pomo-phase-icon">🍅</div>
+        <div class="pomo-time"       id="pomo-clock">25:00</div>
+        <div class="pomo-phase-lbl"  id="pomo-phase-lbl">دراسة</div>
+      </div>
+    </div>
+    <div class="pomo-rounds" id="pomo-rounds-row"></div>
+    <div class="pomo-controls">
+      <button class="pomo-btn pomo-reset" onclick="pomoReset()" title="إعادة">↺</button>
+      <button class="pomo-btn pomo-main"  id="pomo-main-btn" onclick="pomoToggle()">▶</button>
+      <button class="pomo-btn pomo-skip"  onclick="pomoSkip()" title="تخطي">⏭</button>
+    </div>
+    <div class="pomo-settings">
+      <div class="pomo-set-row">
+        <span class="pomo-set-lbl">🍅 دراسة</span>
+        <div class="pomo-set-ctrl">
+          <button onclick="pomoAdjust('work',-5)">−</button>
+          <span id="pomo-work-val">25</span>
+          <button onclick="pomoAdjust('work',5)">+</button>
+        </div>
+        <span class="pomo-set-unit">دقيقة</span>
+      </div>
+      <div class="pomo-set-row">
+        <span class="pomo-set-lbl">☕ استراحة</span>
+        <div class="pomo-set-ctrl">
+          <button onclick="pomoAdjust('break',-5)">−</button>
+          <span id="pomo-break-val">5</span>
+          <button onclick="pomoAdjust('break',5)">+</button>
+        </div>
+        <span class="pomo-set-unit">دقيقة</span>
+      </div>
+    </div>
+    <div class="pts-rule">كل جولة بومودورو مكتملة = نقاط تُحتسب تلقائياً ⚡</div>
+  </div>
+</div>
+
+<!-- NORMAL STUDY PANEL -->
+<div id="normal-panel">
+<div class="card">
+  <div class="sec-ttl">📚 جلسة الدراسة</div>
+  <button class="btn btn-p" onclick="openSessionModal()" style="margin-bottom:1rem">⏱ ابدأ جلسة مخطط لها</button>
+  <span class="field-label">المادة الحالية</span>
+  <select id="subj-sel"></select>
+
+  <div id="session-info">
+    <div class="session-stat">
+      <span class="session-stat-label">📊 الهدف</span>
+      <span class="session-stat-value" id="session-target">—</span>
+    </div>
+    <div class="session-stat">
+      <span class="session-stat-label">⏳ المتبقي</span>
+      <span class="session-stat-value" id="session-remaining">—</span>
+    </div>
+    <div class="session-progress">
+      <div class="session-progress-label">
+        <span>التقدم</span>
+        <span id="session-progress-num">0%</span>
+      </div>
+      <div class="session-progress-bar">
+        <div class="session-progress-fill" id="session-progress-bar"></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="timer-box">
+    <div class="timer-ring-wrap">
+      <div class="timer-pulse-ring"></div>
+      <div class="timer-inner">
+        <div class="timer-label-top" id="timer-subject-lbl">📚 جاري الدراسة</div>
+        <div id="clock">00:00:00</div>
+        <div class="timer-label-bot">الوقت المنقضي</div>
+      </div>
+    </div>
+    <div class="timer-controls">
+      <button id="pause-btn" class="timer-pause-btn" onclick="pauseResume()" style="display:none">⏸</button>
+    </div>
+  </div>
+  <button id="study-btn" class="btn btn-study" onclick="toggleStudy()">
+    <span id="study-lbl">▶ ابدأ الدراسة</span>
+  </button>
+  <div class="pts-rule">دقيقة واحدة = نقطة واحدة لك وللفريق</div>
+</div>
+<div class="timer-fix-note" style="background:rgba(74,222,128,.06);border:1px solid rgba(74,222,128,.15);border-radius:11px;padding:.8rem 1rem;margin-bottom:.7rem;font-size:.78rem;color:var(--ink2);display:flex;align-items:flex-start;gap:.5rem">
+  <span style="flex-shrink:0;color:var(--green)">✅</span>
+  <span>العداد الآن يحسب الوقت بدقة حتى لو فتحت يوتيوب أو واتساب — الوقت لن يضيع!</span>
+</div>
+<div class="tip-box">
+  <div class="tip-ttl">💡 نظام الجلسات</div>
+  <div class="tip-li"><span>📅</span><span>اختر عدد ساعات الدراسة والاستراحة</span></div>
+  <div class="tip-li"><span>⏱</span><span>تنبيهات تلقائية للاستراحة كل فترة</span></div>
+  <div class="tip-li"><span>⚡</span><span>كل دقيقة = نقطة فورية</span></div>
+  <div class="tip-li"><span>🎯</span><span>متابعة مباشرة لتقدمك نحو الهدف</span></div>
+</div>
+    </div><!-- end normal-panel -->
+
+  </div>
+
+  <!-- TAB: RANK -->
+
+  <div id="panel-rank" style="display:none">
+    <div class="rank-tabs">
+      <button class="rank-tab on" id="rtab-squads" onclick="switchRankTab('squads')">🛡️ الفرق</button>
+      <button class="rank-tab"   id="rtab-solo"   onclick="switchRankTab('solo')">👤 الأفراد</button>
+    </div>
+    <div id="rpanel-squads">
+      <div id="lb-wrap"></div>
+    </div>
+    <div id="rpanel-solo" style="display:none">
+      <div id="lb-solo-wrap"></div>
+    </div>
+  </div>
+
+  <!-- TAB: DAILY GOALS -->
+
+  <div id="panel-challenges" style="display:none">
+    <div class="card" style="margin-bottom:.7rem">
+      <div class="sec-ttl">🎯 أهداف اليوم</div>
+      <div style="display:flex;gap:.5rem;margin-bottom:.7rem">
+        <input id="goal-input" type="text" placeholder="أضف هدفاً (مثال: مراجعة الكيمياء)" maxlength="60" autocomplete="off" style="margin:0;flex:1"/>
+        <button class="btn btn-p" onclick="addGoal()" style="margin:0;width:auto;padding:.82rem 1.1rem;flex-shrink:0">+</button>
+      </div>
+      <div id="goals-wrap"></div>
+      <div id="goals-empty" class="empty-msg" style="display:none">لا توجد أهداف اليوم — أضف هدفاً! 🎯</div>
+    </div>
+    <div class="tip-box">
+      <div class="tip-ttl">💡 كيف تستخدمها؟</div>
+      <div class="tip-li"><span>📝</span><span>اكتب أهداف دراستك اليوم</span></div>
+      <div class="tip-li"><span>✅</span><span>اضغط على الهدف لتحديده كمنجز</span></div>
+      <div class="tip-li"><span>🔄</span><span>الأهداف تُحفظ محلياً وتُصفَّر كل يوم تلقائياً</span></div>
+    </div>
+  </div>
+
+  <!-- TAB: STATS -->
+  <div id="panel-stats" style="display:none">
+    <div class="stats-period-row">
+      <button class="stats-period-btn on" id="sp-today"  onclick="switchStatsPeriod('today')">اليوم</button>
+      <button class="stats-period-btn"    id="sp-week"   onclick="switchStatsPeriod('week')">الأسبوع</button>
+      <button class="stats-period-btn"    id="sp-month"  onclick="switchStatsPeriod('month')">الشهر</button>
+      <button class="stats-period-btn"    id="sp-all"    onclick="switchStatsPeriod('all')">الكل</button>
+    </div>
+    <div id="stats-loading" class="stats-loading">⏳ جاري التحميل...</div>
+    <div id="stats-content" style="display:none">
+      <div class="stats-grid">
+        <div class="stat-card gold">
+          <div class="stat-icon" style="color:var(--gold)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+          </div>
+          <div class="stat-val" id="stat-hours">0س</div>
+          <div class="stat-lbl">ساعات الدراسة</div>
+        </div>
+        <div class="stat-card blue">
+          <div class="stat-icon" style="color:var(--blue)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+          </div>
+          <div class="stat-val" id="stat-pts">0</div>
+          <div class="stat-lbl">نقاط مكتسبة</div>
+        </div>
+        <div class="stat-card teal">
+          <div class="stat-icon" style="color:var(--teal)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>
+          </div>
+          <div class="stat-val" id="stat-sessions">0</div>
+          <div class="stat-lbl">جلسات دراسة</div>
+        </div>
+        <div class="stat-card green">
+          <div class="stat-icon" style="color:var(--green)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+          </div>
+          <div class="stat-val" id="stat-avg">0د</div>
+          <div class="stat-lbl">متوسط الجلسة</div>
+        </div>
+      </div>
+      <div class="card" style="margin-bottom:.9rem">
+        <div class="sec-ttl">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="15" height="15"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>
+          توزيع المواد
+        </div>
+        <div id="stats-subjects"></div>
+      </div>
+      <div class="card" id="stats-days-card" style="margin-bottom:.9rem;display:none">
+        <div class="sec-ttl">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="15" height="15"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+          نشاط الأيام
+        </div>
+        <div id="stats-days"></div>
+      </div>
+      <div class="card" style="margin-bottom:.9rem">
+        <div class="sec-ttl">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="15" height="15"><circle cx="12" cy="8" r="7"/><polyline points="8.21 13.89 7 23 12 20 17 23 15.79 13.88"/></svg>
+          إنجازاتك
+        </div>
+        <div id="stats-badges"></div>
+      </div>
+    </div>
+    <div id="stats-empty" class="empty-msg" style="display:none">لا توجد جلسات بعد — ابدأ الدراسة! 📚</div>
+  </div>
+
+  <!-- TAB: LECTURES -->
+
+  <div id="panel-lectures" style="display:none">
+    <div class="card" style="margin-bottom:.9rem">
+      <div class="sec-ttl">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="15" height="15"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
+        شاهد محاضرتك هنا
+      </div>
+      <input id="lecture-url" type="text" placeholder="حط رابط المحاضرة من يوتيوب هنا…" autocomplete="off" style="margin-bottom:.6rem" onkeydown="if(event.key==='Enter')watchLecture()"/>
+      <button class="btn btn-p" onclick="watchLecture()">▶️ شاهد المحاضرة</button>
+      <div id="lecture-err" class="empty-msg" style="display:none;margin-top:.5rem;padding:.5rem 0"></div>
+    </div>
+
+    <div id="lecture-player-wrap" style="display:none;margin-bottom:.9rem">
+      <div class="card" style="padding:.6rem">
+        <div id="lecture-player-box" style="position:relative;width:100%;padding-top:56.25%;border-radius:10px;overflow:hidden;background:#000">
+          <iframe id="lecture-iframe" style="position:absolute;inset:0;width:100%;height:100%;border:0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="sec-ttl">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="15" height="15"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+        آخر المحاضرات اللي شاهدتها
+      </div>
+      <div id="lecture-history"></div>
+      <div id="lecture-history-empty" class="empty-msg" style="display:none">ما شفت أي محاضرة لسه 🎬</div>
+    </div>
+  </div>
+
+</div>
+
+</div><!-- end .wrap -->
+
+<!-- MODAL: MOOD CHECK -->
+<div id="mood-modal" class="mood-modal-overlay" onclick="closeMoodModal(event)">
+  <div class="mood-modal-box">
+    <div class="mood-modal-hd">
+      <span>كيف مزاجك اليوم؟ 🌟</span>
+      <button class="modal-close" onclick="closeMoodModal()">✕</button>
+    </div>
+    <div class="mood-subtitle">اختر حالتك قبل ما تبدأ الجلسة</div>
+    <div class="mood-btns-row">
+      <button class="mood-btn" data-mood="😴" onclick="selectMood('😴')">
+        <span class="mood-emoji">😴</span>
+        <span class="mood-lbl">تعبان</span>
+      </button>
+      <button class="mood-btn" data-mood="😐" onclick="selectMood('😐')">
+        <span class="mood-emoji">😐</span>
+        <span class="mood-lbl">عادي</span>
+      </button>
+      <button class="mood-btn" data-mood="😊" onclick="selectMood('😊')">
+        <span class="mood-emoji">😊</span>
+        <span class="mood-lbl">زين</span>
+      </button>
+      <button class="mood-btn" data-mood="🔥" onclick="selectMood('🔥')">
+        <span class="mood-emoji">🔥</span>
+        <span class="mood-lbl">متحمس</span>
+      </button>
+      <button class="mood-btn" data-mood="😤" onclick="selectMood('😤')">
+        <span class="mood-emoji">😤</span>
+        <span class="mood-lbl">ضاغط</span>
+      </button>
+    </div>
+    <div id="mood-msg" class="mood-msg" style="display:none"></div>
+    <button class="btn btn-p" onclick="confirmMoodAndStart()" style="margin-top:.8rem">🚀 ابدأ الجلسة</button>
+    <button class="btn" onclick="closeMoodModal()" style="margin-top:.4rem;background:transparent;color:var(--ink2);font-size:.82rem;padding:.5rem">تخطي</button>
+  </div>
+</div>
+
+<!-- MODAL: SESSION -->
+
+<div id="session-modal" class="session-modal">
+  <div class="session-content">
+    <div class="session-hd">
+      <span>⏱ إعداد الجلسة</span>
+      <button class="modal-close" onclick="closeSessionModal()">✕</button>
+    </div>
+    <div class="session-field">
+      <label>📚 مدة الدراسة (ساعات)</label>
+      <input type="range" id="session-hours" class="session-slider" min="0.5" max="10" step="0.5" value="2"
+        oninput="document.getElementById('session-hours-val').textContent=this.value+' ساعة'"/>
+      <div class="session-value" id="session-hours-val">2 ساعة</div>
+    </div>
+    <div class="session-field">
+      <label>☕ مدة الاستراحة (دقائق)</label>
+      <input type="range" id="session-break" class="session-slider" min="5" max="30" step="5" value="10"
+        oninput="document.getElementById('session-break-val').textContent=this.value+' دقيقة'"/>
+      <div class="session-value" id="session-break-val">10 دقيقة</div>
+    </div>
+    <button class="btn btn-p" onclick="startSession()">🚀 ابدأ الجلسة</button>
+  </div>
+</div>
+
+<!-- DAILY GOALS LOGIC IS IN JS -->
+
+<div id="pts-flash"></div>
+<div id="toast" class="toast"></div>
+
+<script>
+window.pickBranch = function(b){
+  document.getElementById('r-branch').value = b;
+  document.getElementById('bb-sci').classList.toggle('sel', b==='علمي');
+  document.getElementById('bb-lit').classList.toggle('sel', b==='أدبي');
+};
+window.pickSignupBranch = function(b){
+  document.getElementById('signup-branch').value = b;
+  document.getElementById('bb-signup-sci').classList.toggle('sel', b==='علمي');
+  document.getElementById('bb-signup-lit').classList.toggle('sel', b==='أدبي');
+};
+pickBranch('علمي');
+pickSignupBranch('علمي');
+
+// ══ نظام الثيمات ══
+const THEMES = ['gold','purple','emerald','rose','sky','light'];
+
+function applyTheme(theme) {
+  // نزيل كل الثيمات القديمة
+  document.body.classList.remove(...THEMES.map(t => 'theme-'+t));
+  if (theme !== 'gold') document.body.classList.add('theme-'+theme);
+  // نحفظ اختيار الطالب
+  localStorage.setItem('mizan_theme', theme);
+  // نحدث الـ active state في الكاردات
+  THEMES.forEach(t => {
+    const el = document.getElementById('tc-'+t);
+    if (el) el.classList.toggle('active', t === theme);
+  });
+  // نغلق المودال بعد الاختيار
+  setTimeout(() => document.getElementById('theme-modal').classList.remove('open'), 300);
+}
+
+window.openThemeModal = () => {
+  document.getElementById('theme-modal').classList.add('open');
+};
+window.closeThemeModal = (e) => {
+  if (e.target === document.getElementById('theme-modal')) {
+    document.getElementById('theme-modal').classList.remove('open');
+  }
+};
+
+// تحميل الثيم المحفوظ عند فتح الصفحة
+(function loadSavedTheme() {
+  const saved = localStorage.getItem('mizan_theme') || 'gold';
+  applyTheme(saved);
+})();
+
+</script>
 
 </body>
 </html>
