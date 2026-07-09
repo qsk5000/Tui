@@ -1680,9 +1680,6 @@ body::before{content:'';position:fixed;inset:0;pointer-events:none;z-index:0;
     radial-gradient(ellipse 80% 55% at 8% -5%,  rgba(255,107,53,.07) 0%,transparent 52%),
     radial-gradient(ellipse 55% 45% at 92% 98%, rgba(45,212,191,.05) 0%,transparent 55%),
     radial-gradient(ellipse 40% 30% at 50% 50%, rgba(96,165,250,.03) 0%,transparent 58%);}
-body::after{content:'';position:fixed;inset:0;pointer-events:none;z-index:0;
-  background-image:linear-gradient(var(--br) 1px,transparent 1px),linear-gradient(90deg,var(--br) 1px,transparent 1px);
-  background-size:56px 56px;}
 
 .topbar{position:sticky;top:0;z-index:300;display:flex;align-items:center;justify-content:space-between;
   padding:.6rem .9rem;background:rgba(10,7,16,.85);backdrop-filter:blur(24px) saturate(180%);border-bottom:1px solid var(--br);
@@ -1748,15 +1745,12 @@ body::after{content:'';position:fixed;inset:0;pointer-events:none;z-index:0;
 .auth-or::before,.auth-or::after{content:'';flex:1;height:1px;background:var(--br)}
 
 .card{background:var(--c1);border:1px solid var(--br);
-  border-radius:4px 22px 4px 4px;padding:1.35rem;
+  border-radius:4px 16px 4px 4px;padding:1.35rem;
   margin-bottom:.9rem;box-shadow:0 6px 32px rgba(0,0,0,.4);position:relative;overflow:hidden;
   border-right:3px solid rgba(var(--accent-rgb),.5);
   animation:fadeUp .45s ease both;}
 .card::before{content:'';position:absolute;top:0;right:0;width:130px;height:130px;
   background:radial-gradient(circle,rgba(255,107,53,.04) 0%,transparent 70%);pointer-events:none;}
-.card::after{content:'';position:absolute;top:10px;left:10px;width:16px;height:16px;
-  border-top:2px solid rgba(var(--accent-rgb),.4);border-left:2px solid rgba(var(--accent-rgb),.4);
-  pointer-events:none;opacity:.7}
 @keyframes fadeUp{from{opacity:0;transform:translateY(18px)}to{opacity:1;transform:translateY(0)}}
 .sec-ttl{font-size:.88rem;font-weight:800;color:var(--gold);margin-bottom:1rem;
   display:flex;align-items:center;gap:.55rem;letter-spacing:.2px;font-family:'Cairo',sans-serif}
