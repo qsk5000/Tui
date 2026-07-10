@@ -3,7 +3,7 @@
 <html lang="ar" dir="rtl">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover">
 <title>ميزان — Squads | السادس الإعدادي</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@300;400;500;700;800;900&family=Cairo:wght@700;800;900&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -43,6 +43,84 @@ let currentSessionId = null; // ← مفتاح إصلاح الجلسات الم�
 let isSaving = false;        // ← يمنع stopStudy تشتغل مرتين
 
 const G       = id => document.getElementById(id);
+
+// ══════════════════════════════════════════════
+// ══ نظام الاشتراك التجريبي — تفعيل يدوي + قفل تلقائي ══
+// كيفية التفعيل: بفايرستور، وثيقة users/{uid}، أضف حقل activated=true (Boolean)
+// من هذه اللحظة يبلش عد 3 أيام تلقائياً، وبعدها يقفل التطبيق كامل ويطلع صفحة الاشتراك
+// للاشتراك الدائم: أضف isPremium=true (يلغي القفل نهائياً بدون حد زمني)
+// ══════════════════════════════════════════════
+const TRIAL_DAYS = 3;
+let trialLocked = false;      // آخر حالة معروفة للقفل (نستخدمها نمنع تكرار نفس الشاشة)
+let trialWatchTimer = null;   // مؤقت يفحص كل دقيقة إذا خلصت المدة وقت ما التطبيق مفتوح
+
+function computeTrialState(u) {
+  if (!u) return { state:'waiting' };
+  if (u.isPremium) return { state:'premium' };
+  if (!u.activated) return { state:'waiting' };
+  if (!u.trialStart) return { state:'justActivated' }; // أول لحظة تفعيل، لسه ما انسجل وقت البداية
+  const start = u.trialStart.toDate ? u.trialStart.toDate() : new Date(u.trialStart);
+  const daysPassed = (Date.now() - start.getTime()) / 86400000;
+  if (daysPassed >= TRIAL_DAYS) return { state:'expired' };
+  return { state:'active', daysLeft: Math.max(1, Math.ceil(TRIAL_DAYS - daysPassed)) };
+}
+
+// يرجع true إذا التطبيق مقفول (وقد عرض شاشة القفل المناسبة)
+async function enforceTrialGate() {
+  const snap = await getDoc(doc(db,'users',uid));
+  if (!snap.exists()) return false; // نظام التسجيل يتكفل بيه لحاله
+  const u = snap.data();
+  let info = computeTrialState(u);
+
+  if (info.state === 'justActivated') {
+    // أول ما نكتشف activated=true بدون trialStart، نسجل لحظة البداية الآن
+    await updateDoc(doc(db,'users',uid), { trialStart: serverTimestamp() });
+    info = { state:'active', daysLeft: TRIAL_DAYS };
+  }
+
+  if (info.state === 'waiting') { showTrialLock('waiting'); trialLocked = true; return true; }
+  if (info.state === 'expired') { showTrialLock('expired'); trialLocked = true; return true; }
+
+  trialLocked = false;
+  updateTrialBanner(info);
+  return false;
+}
+
+function showTrialLock(kind) {
+  goScreen('s-trial-lock');
+  const box = G('trial-lock-box');
+  if (!box) return;
+  if (kind === 'waiting') {
+    box.innerHTML = `
+      <div class="tl-icon">⏳</div>
+      <div class="tl-title">حسابك لسه ما تفعّل</div>
+      <div class="tl-sub">تواصل وياي عشان أفعّل تجربتك المجانية وتقدر تستخدم منصة ميزان كاملة.</div>
+      <a class="btn btn-p" href="https://t.me/mizaniq1" target="_blank" rel="noopener" style="text-decoration:none">📩 تواصل للتفعيل</a>`;
+  } else {
+    box.innerHTML = `
+      <div class="tl-icon">🔒</div>
+      <div class="tl-title">خلصت مدة التجربة المجانية</div>
+      <div class="tl-sub">خلصت أيامك الـ${TRIAL_DAYS} بمنصة ميزان. اشترك الحين عشان تكمل وياك بدون توقف.</div>
+      <a class="btn btn-p" href="https://t.me/mizaniq1" target="_blank" rel="noopener" style="text-decoration:none">🚀 اشترك الآن</a>`;
+  }
+}
+
+function updateTrialBanner(info) {
+  const b = G('trial-banner');
+  if (!b) return;
+  if (info.state === 'active') {
+    b.style.display = 'flex';
+    b.textContent = `🎁 باقي ${info.daysLeft} يوم بتجربتك المجانية — اشترك بأي وقت من هنا`;
+  } else {
+    b.style.display = 'none';
+  }
+}
+
+function startTrialWatch() {
+  if (trialWatchTimer) clearInterval(trialWatchTimer);
+  trialWatchTimer = setInterval(() => { if (uid) enforceTrialGate(); }, 60000); // فحص كل دقيقة
+}
+
 const setText = (id,v) => { const e=G(id); if(e) e.textContent=v; };
 const fmt     = n => n>=1000?(n/1000).toFixed(1)+'K':String(n);
 const fmtH    = s => s>=3600?(s/3600).toFixed(1)+'س':s>=60?Math.floor(s/60)+'د':s+'ث';
@@ -101,6 +179,7 @@ onAuthStateChanged(auth, async u => {
     const userInfo  = document.getElementById('top-user-info');
     if (logoutBtn) logoutBtn.style.display = 'none';
     if (userInfo)  userInfo.style.display  = 'none';
+    if (trialWatchTimer) { clearInterval(trialWatchTimer); trialWatchTimer = null; }
     return;
   }
   uid = u.uid;
@@ -109,11 +188,23 @@ onAuthStateChanged(auth, async u => {
   if (logoutBtn) logoutBtn.style.display = 'block';
   if (userInfo)  userInfo.style.display  = 'block';
   await boot();
+
+  // مراقبة حية: إذا فعّلت اشتراك دائم أو انتهت التجربة وهو فاتح التطبيق، ينحدث فوراً
+  onSnapshot(doc(db,'users',uid), snap => {
+    if (!snap.exists()) return;
+    const wasLocked = trialLocked;
+    enforceTrialGate().then(isLocked => {
+      if (wasLocked && !isLocked) boot(); // انفتح الحساب وهو بشاشة القفل → رجّعه لمنصة
+    });
+  });
+  startTrialWatch();
 });
 
 async function boot() {
   const snap = await getDoc(doc(db,'users',uid));
   if (!snap.exists()) { goScreen('s-register'); return; }
+  const locked = await enforceTrialGate();
+  if (locked) return;
   const d = snap.data();
   if (!d.squadId) { prefillLobby(d); goScreen('s-lobby'); return; }
   squadId = d.squadId;
@@ -946,7 +1037,7 @@ window.switchRankTab = tab => {
   if (tab === 'solo' && typeof loadSoloLeaderboard === 'function') loadSoloLeaderboard();
 };
 window.switchTab = tab => {
-  ['team','study','lectures','rank','challenges','stats'].forEach(t => {
+  ['team','study','lectures','rank','challenges','stats','assistant'].forEach(t => {
     const panel = G('panel-'+t);
     const tabEl = G('tab-'+t);
     if (panel) panel.style.display = t===tab ? 'block' : 'none';
@@ -955,6 +1046,7 @@ window.switchTab = tab => {
   if (tab === 'challenges') { renderGoals(); loadMonsters(); }
   if (tab === 'stats') loadStats('today');
   if (tab === 'lectures') loadLectureHistory();
+  if (tab === 'assistant') openBotPanel();
 };
 window.toggleForm = w => {
   const c=G('form-c'), j=G('form-j'), av=G('form-av');
@@ -1463,12 +1555,10 @@ async function loadStats(period) {
 }
 
 function goScreen(id) {
-  ['s-auth','s-register','s-lobby','s-squad'].forEach(s => {
+  ['s-auth','s-register','s-lobby','s-squad','s-trial-lock'].forEach(s => {
     const el = G(s); if(el) el.style.display='none';
   });
   const target = G(id); if(target) target.style.display='block';
-  const fab = G('bot-fab');
-  if (fab) fab.style.display = (id === 's-squad') ? 'flex' : 'none';
 }
 
 // ══ نظام مشاهدة المحاضرات (يوتيوب) — مربوط بعداد الدراسة تلقائياً ══
@@ -1686,11 +1776,8 @@ async function botCheckTrialStatus() {
 }
 
 window.openBotPanel = async () => {
-  const modal = G('bot-modal');
-  modal.style.display = 'flex';
-  modal.classList.add('open');
   const wrap = G('bot-messages');
-  if (wrap.dataset.opened) return; // ما نكرر رسالة الترحيب كل مرة يفتح
+  if (!wrap || wrap.dataset.opened) return; // ما نكرر رسالة الترحيب كل مرة يفتح التبويب
   wrap.dataset.opened = '1';
 
   const status = await botCheckTrialStatus();
@@ -1702,14 +1789,6 @@ window.openBotPanel = async () => {
     ? 'هلا بيك! 👋 آمر شنو أساعدك اليوم؟'
     : `هلا بيك! 👋 أنا مساعدك الشخصي، رح أساعدك تنظم دراستك أول بأول. عندك ${status.daysLeft} يوم متبقي بالتجربة المجانية 🎁`;
   botAppendMsg(greeting, 'bot');
-};
-
-window.closeBotPanel = (e) => {
-  if (!e || e.target.id === 'bot-modal' || e.target.id === 'bot-close-btn') {
-    const modal = G('bot-modal');
-    modal.classList.remove('open');
-    modal.style.display = 'none';
-  }
 };
 
 function botShowPaywall(usageCount) {
@@ -2394,33 +2473,27 @@ select option{background:var(--c2)}
 .badge-title{font-size:.85rem;font-weight:700;color:var(--gold)}
 .badge-desc{font-size:.72rem;color:var(--ink3);margin-top:.1rem}
 
-/* ══ المساعد الشخصي ══ */
-#bot-fab{position:fixed;
-  bottom:calc(1.2rem + env(safe-area-inset-bottom));
-  right:calc(1.2rem + env(safe-area-inset-right));
-  z-index:500;display:none;
-  width:56px;height:56px;border-radius:50%;border:none;cursor:pointer;
-  background:linear-gradient(135deg,var(--accent),var(--accent-dark));
-  font-size:1.5rem;align-items:center;justify-content:center;
-  box-shadow:0 6px 20px rgba(var(--accent-rgb),.45),0 0 0 4px rgba(var(--accent-rgb),.12);
-  animation:botFabPulse 2.6s ease-in-out infinite}
-@keyframes botFabPulse{0%,100%{transform:scale(1)}50%{transform:scale(1.06)}}
+/* ══ قفل الاشتراك التجريبي ══ */
+#trial-banner{display:none;align-items:center;justify-content:center;text-align:center;
+  gap:.4rem;background:linear-gradient(90deg,rgba(var(--accent-rgb),.15),rgba(var(--accent-rgb),.22),rgba(var(--accent-rgb),.15));
+  border:1px solid rgba(var(--accent-rgb),.35);color:var(--gold);font-weight:800;font-size:.78rem;
+  padding:.6rem .9rem;border-radius:12px;margin:0 0 .8rem}
+.tl-wrap{min-height:100vh;min-height:100dvh;display:flex;align-items:center;justify-content:center;
+  padding:1.5rem 1.1rem;box-sizing:border-box}
+.tl-box{background:var(--c1);border:1px solid var(--br);border-radius:var(--r);
+  padding:2.2rem 1.6rem;max-width:380px;width:100%;text-align:center;
+  box-shadow:0 10px 40px rgba(0,0,0,.35)}
+.tl-icon{font-size:3rem;margin-bottom:.9rem}
+.tl-title{font-size:1.15rem;font-weight:900;color:var(--gold);font-family:'Cairo',sans-serif;margin-bottom:.6rem}
+.tl-sub{font-size:.86rem;color:var(--ink2);line-height:1.8;margin-bottom:1.4rem}
 
-#bot-modal{display:none;position:fixed;inset:0;z-index:99999;
-  align-items:flex-end;justify-content:center;
-  background:rgba(0,0,0,.55);backdrop-filter:blur(6px)}
-#bot-modal.open{display:flex}
-.bot-sheet{background:var(--c1);border-radius:20px 20px 0 0;border-top:1px solid var(--br);
-  width:100%;max-width:460px;height:85dvh;height:85vh;max-height:640px;
-  display:flex;flex-direction:column;min-height:0;
-  animation:slideUp .25s ease;overflow:hidden}
-.bot-hd{display:flex;align-items:center;justify-content:space-between;
-  padding:.9rem 1rem;border-bottom:1px solid var(--br);flex-shrink:0}
-.bot-hd-title{font-size:.9rem;font-weight:900;color:var(--gold);font-family:'Cairo',sans-serif}
-#bot-messages{flex:1 1 auto;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;
-  padding:1rem;display:flex;flex-direction:column;gap:.6rem}
-.bot-msg{max-width:85%;padding:.6rem .85rem;border-radius:14px;font-size:.82rem;line-height:1.6;
-  animation:fadeUp .25s ease both;word-break:break-word}
+/* ══ المساعد الشخصي (تبويب ثابت) ══ */
+.bot-panel-card{padding:1.1rem 0 0;display:flex;flex-direction:column;
+  height:min(70vh,560px);height:min(70dvh,560px)}
+.bot-panel-card .sec-ttl{padding:0 1.1rem;margin-bottom:.7rem}
+#bot-messages{flex:1;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:0 1.1rem 1rem;display:flex;flex-direction:column;gap:.6rem}
+.bot-msg{max-width:82%;padding:.65rem .9rem;border-radius:14px;font-size:.84rem;line-height:1.6;
+  animation:fadeUp .25s ease both}
 .bot-msg-bot{align-self:flex-start;background:var(--c2);color:var(--ink);border:1px solid var(--br);
   border-bottom-right-radius:3px}
 .bot-msg-me{align-self:flex-end;background:linear-gradient(135deg,var(--accent),var(--accent-dark));
@@ -2431,20 +2504,14 @@ select option{background:var(--c2)}
 .bot-typing span:nth-child(2){animation-delay:.2s}
 .bot-typing span:nth-child(3){animation-delay:.4s}
 @keyframes botDot{0%,60%,100%{opacity:.3;transform:translateY(0)}30%{opacity:1;transform:translateY(-3px)}}
-#bot-quick-replies{display:flex;flex-wrap:wrap;gap:.4rem;padding:.8rem .9rem;
-  border-top:1px solid var(--br);flex-shrink:0;
-  padding-bottom:calc(.8rem + env(safe-area-inset-bottom))}
+#bot-quick-replies{display:flex;flex-wrap:wrap;gap:.5rem;padding:.9rem 1.1rem;
+  border-top:1px solid var(--br);flex-shrink:0;max-height:35vh;overflow-y:auto}
 #bot-quick-replies button{background:var(--c2);border:1.5px solid var(--br);color:var(--ink2);
-  padding:.45rem .7rem;border-radius:20px;font-size:.7rem;font-weight:700;cursor:pointer;
-  font-family:'Tajawal',sans-serif;transition:all .18s;white-space:nowrap}
+  padding:.5rem .85rem;border-radius:20px;font-size:.76rem;font-weight:700;cursor:pointer;
+  font-family:'Tajawal',sans-serif;transition:all .18s}
 #bot-quick-replies button:hover{border-color:rgba(var(--accent-rgb),.4);color:var(--gold)}
 .bot-paywall{text-align:center;padding:1.5rem 1rem;margin:auto}
 .bot-paywall-icon{font-size:2.6rem;margin-bottom:.6rem}
-@media (max-width:380px){
-  #bot-quick-replies{gap:.35rem;padding:.7rem .7rem}
-  #bot-quick-replies button{font-size:.66rem;padding:.4rem .6rem}
-  .bot-msg{font-size:.8rem;max-width:88%}
-}
 .bot-paywall-title{font-size:1rem;font-weight:900;color:var(--gold);margin-bottom:.5rem;font-family:'Cairo',sans-serif}
 .bot-paywall-sub{font-size:.82rem;color:var(--ink2);line-height:1.7;max-width:300px;margin:0 auto}
 
@@ -2756,6 +2823,8 @@ select option{background:var(--c2)}
 
 <div id="s-squad" style="display:none">
 
+  <div id="trial-banner" style="display:none"></div>
+
   <div class="sq-hero">
     <div class="sq-big" id="sq-name">…</div>
     <div class="sq-meta">
@@ -2799,7 +2868,7 @@ select option{background:var(--c2)}
     </div>
   </div>
 
-  <div class="tabs" style="grid-template-columns:repeat(6,1fr)">
+  <div class="tabs" style="grid-template-columns:repeat(7,1fr)">
     <button class="tab on" id="tab-team"       onclick="switchTab('team')">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
       الفريق
@@ -2823,6 +2892,10 @@ select option{background:var(--c2)}
     <button class="tab" id="tab-stats" onclick="switchTab('stats')">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
       إحصائياتي
+    </button>
+    <button class="tab" id="tab-assistant" onclick="switchTab('assistant')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8V4H8"/><rect x="4" y="8" width="16" height="12" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></svg>
+      مساعد
     </button>
   </div>
 
@@ -3125,26 +3198,31 @@ select option{background:var(--c2)}
     </div>
   </div>
 
+  <!-- TAB: ASSISTANT -->
+
+  <div id="panel-assistant" style="display:none">
+    <div class="card bot-panel-card">
+      <div class="sec-ttl">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="15" height="15"><path d="M12 8V4H8"/><rect x="4" y="8" width="16" height="12" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></svg>
+        مساعدك الشخصي
+      </div>
+      <div id="bot-messages"></div>
+      <div id="bot-quick-replies">
+        <button onclick="botAsk('plan')">📚 شنو أدرس اليوم؟</button>
+        <button onclick="botAsk('today')">📊 شلون وضعي اليوم؟</button>
+        <button onclick="botAsk('hype')">🔥 حفزني!</button>
+        <button onclick="botAsk('squad')">🛡️ وضع فريقي؟</button>
+        <button onclick="botAsk('tip')">💡 نصيحة اليوم</button>
+      </div>
+    </div>
+  </div>
+
 </div>
 
-<!-- زر المساعد الشخصي العائم -->
-<button id="bot-fab" onclick="openBotPanel()">🧑‍🏫</button>
-
-<!-- نافذة المساعد الشخصي -->
-<div id="bot-modal" onclick="closeBotPanel(event)">
-  <div class="bot-sheet">
-    <div class="bot-hd">
-      <div class="bot-hd-title">🧑‍🏫 مساعدك الشخصي</div>
-      <button id="bot-close-btn" class="modal-close" onclick="closeBotPanel(event)">✕</button>
-    </div>
-    <div id="bot-messages"></div>
-    <div id="bot-quick-replies">
-      <button onclick="botAsk('plan')">📚 شنو أدرس اليوم؟</button>
-      <button onclick="botAsk('today')">📊 شلون وضعي اليوم؟</button>
-      <button onclick="botAsk('hype')">🔥 حفزني!</button>
-      <button onclick="botAsk('squad')">🛡️ وضع فريقي؟</button>
-      <button onclick="botAsk('tip')">💡 نصيحة اليوم</button>
-    </div>
+<!-- شاشة قفل الاشتراك التجريبي -->
+<div id="s-trial-lock" style="display:none">
+  <div class="tl-wrap">
+    <div class="tl-box" id="trial-lock-box"></div>
   </div>
 </div>
 
