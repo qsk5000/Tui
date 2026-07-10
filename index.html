@@ -3,7 +3,7 @@
 <html lang="ar" dir="rtl">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
 <title>ميزان — Squads | السادس الإعدادي</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@300;400;500;700;800;900&family=Cairo:wght@700;800;900&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -43,84 +43,6 @@ let currentSessionId = null; // ← مفتاح إصلاح الجلسات الم�
 let isSaving = false;        // ← يمنع stopStudy تشتغل مرتين
 
 const G       = id => document.getElementById(id);
-
-// ══════════════════════════════════════════════
-// ══ نظام الاشتراك التجريبي — تفعيل يدوي + قفل تلقائي ══
-// كيفية التفعيل: بفايرستور، وثيقة users/{uid}، أضف حقل activated=true (Boolean)
-// من هذه اللحظة يبلش عد 3 أيام تلقائياً، وبعدها يقفل التطبيق كامل ويطلع صفحة الاشتراك
-// للاشتراك الدائم: أضف isPremium=true (يلغي القفل نهائياً بدون حد زمني)
-// ══════════════════════════════════════════════
-const TRIAL_DAYS = 3;
-let trialLocked = false;      // آخر حالة معروفة للقفل (نستخدمها نمنع تكرار نفس الشاشة)
-let trialWatchTimer = null;   // مؤقت يفحص كل دقيقة إذا خلصت المدة وقت ما التطبيق مفتوح
-
-function computeTrialState(u) {
-  if (!u) return { state:'waiting' };
-  if (u.isPremium) return { state:'premium' };
-  if (!u.activated) return { state:'waiting' };
-  if (!u.trialStart) return { state:'justActivated' }; // أول لحظة تفعيل، لسه ما انسجل وقت البداية
-  const start = u.trialStart.toDate ? u.trialStart.toDate() : new Date(u.trialStart);
-  const daysPassed = (Date.now() - start.getTime()) / 86400000;
-  if (daysPassed >= TRIAL_DAYS) return { state:'expired' };
-  return { state:'active', daysLeft: Math.max(1, Math.ceil(TRIAL_DAYS - daysPassed)) };
-}
-
-// يرجع true إذا التطبيق مقفول (وقد عرض شاشة القفل المناسبة)
-async function enforceTrialGate() {
-  const snap = await getDoc(doc(db,'users',uid));
-  if (!snap.exists()) return false; // نظام التسجيل يتكفل بيه لحاله
-  const u = snap.data();
-  let info = computeTrialState(u);
-
-  if (info.state === 'justActivated') {
-    // أول ما نكتشف activated=true بدون trialStart، نسجل لحظة البداية الآن
-    await updateDoc(doc(db,'users',uid), { trialStart: serverTimestamp() });
-    info = { state:'active', daysLeft: TRIAL_DAYS };
-  }
-
-  if (info.state === 'waiting') { showTrialLock('waiting'); trialLocked = true; return true; }
-  if (info.state === 'expired') { showTrialLock('expired'); trialLocked = true; return true; }
-
-  trialLocked = false;
-  updateTrialBanner(info);
-  return false;
-}
-
-function showTrialLock(kind) {
-  goScreen('s-trial-lock');
-  const box = G('trial-lock-box');
-  if (!box) return;
-  if (kind === 'waiting') {
-    box.innerHTML = `
-      <div class="tl-icon">⏳</div>
-      <div class="tl-title">حسابك لسه ما تفعّل</div>
-      <div class="tl-sub">تواصل وياي عشان أفعّل تجربتك المجانية وتقدر تستخدم منصة ميزان كاملة.</div>
-      <a class="btn btn-p" href="https://t.me/mizaniq1" target="_blank" rel="noopener" style="text-decoration:none">📩 تواصل للتفعيل</a>`;
-  } else {
-    box.innerHTML = `
-      <div class="tl-icon">🔒</div>
-      <div class="tl-title">خلصت مدة التجربة المجانية</div>
-      <div class="tl-sub">خلصت أيامك الـ${TRIAL_DAYS} بمنصة ميزان. اشترك الحين عشان تكمل وياك بدون توقف.</div>
-      <a class="btn btn-p" href="https://t.me/mizaniq1" target="_blank" rel="noopener" style="text-decoration:none">🚀 اشترك الآن</a>`;
-  }
-}
-
-function updateTrialBanner(info) {
-  const b = G('trial-banner');
-  if (!b) return;
-  if (info.state === 'active') {
-    b.style.display = 'flex';
-    b.textContent = `🎁 باقي ${info.daysLeft} يوم بتجربتك المجانية — اشترك بأي وقت من هنا`;
-  } else {
-    b.style.display = 'none';
-  }
-}
-
-function startTrialWatch() {
-  if (trialWatchTimer) clearInterval(trialWatchTimer);
-  trialWatchTimer = setInterval(() => { if (uid) enforceTrialGate(); }, 60000); // فحص كل دقيقة
-}
-
 const setText = (id,v) => { const e=G(id); if(e) e.textContent=v; };
 const fmt     = n => n>=1000?(n/1000).toFixed(1)+'K':String(n);
 const fmtH    = s => s>=3600?(s/3600).toFixed(1)+'س':s>=60?Math.floor(s/60)+'د':s+'ث';
@@ -179,7 +101,6 @@ onAuthStateChanged(auth, async u => {
     const userInfo  = document.getElementById('top-user-info');
     if (logoutBtn) logoutBtn.style.display = 'none';
     if (userInfo)  userInfo.style.display  = 'none';
-    if (trialWatchTimer) { clearInterval(trialWatchTimer); trialWatchTimer = null; }
     return;
   }
   uid = u.uid;
@@ -188,23 +109,11 @@ onAuthStateChanged(auth, async u => {
   if (logoutBtn) logoutBtn.style.display = 'block';
   if (userInfo)  userInfo.style.display  = 'block';
   await boot();
-
-  // مراقبة حية: إذا فعّلت اشتراك دائم أو انتهت التجربة وهو فاتح التطبيق، ينحدث فوراً
-  onSnapshot(doc(db,'users',uid), snap => {
-    if (!snap.exists()) return;
-    const wasLocked = trialLocked;
-    enforceTrialGate().then(isLocked => {
-      if (wasLocked && !isLocked) boot(); // انفتح الحساب وهو بشاشة القفل → رجّعه لمنصة
-    });
-  });
-  startTrialWatch();
 });
 
 async function boot() {
   const snap = await getDoc(doc(db,'users',uid));
   if (!snap.exists()) { goScreen('s-register'); return; }
-  const locked = await enforceTrialGate();
-  if (locked) return;
   const d = snap.data();
   if (!d.squadId) { prefillLobby(d); goScreen('s-lobby'); return; }
   squadId = d.squadId;
@@ -1554,7 +1463,7 @@ async function loadStats(period) {
 }
 
 function goScreen(id) {
-  ['s-auth','s-register','s-lobby','s-squad','s-trial-lock'].forEach(s => {
+  ['s-auth','s-register','s-lobby','s-squad'].forEach(s => {
     const el = G(s); if(el) el.style.display='none';
   });
   const target = G(id); if(target) target.style.display='block';
@@ -2119,15 +2028,15 @@ select option{background:var(--c2)}
 @keyframes pr{0%,100%{box-shadow:0 3px 0 #b91c1c,0 0 0 0 rgba(248,113,113,.4)}50%{box-shadow:0 3px 0 #b91c1c,0 0 0 10px rgba(248,113,113,0)}}
 
 .sq-hero{background:linear-gradient(135deg,rgba(255,107,53,.08),rgba(45,212,191,.04));
-  border:1px solid rgba(255,107,53,.15);border-radius:4px 26px 4px 4px;padding:1.05rem .95rem;
-  text-align:center;margin-bottom:.7rem;position:relative;overflow:hidden;animation:fadeUp .4s ease both}
+  border:1px solid rgba(255,107,53,.15);border-radius:4px 26px 4px 4px;padding:1.5rem 1.3rem;
+  text-align:center;margin-bottom:.9rem;position:relative;overflow:hidden;animation:fadeUp .4s ease both}
 .sq-hero::after{content:'';position:absolute;bottom:-30px;left:50%;transform:translateX(-50%);
   width:220px;height:60px;background:radial-gradient(ellipse,rgba(255,107,53,.07) 0%,transparent 70%)}
-.sq-big{font-size:1.3rem;font-weight:900;color:var(--gold);margin-bottom:.25rem;line-height:1.2;font-family:'Cairo',sans-serif}
-.sq-meta{font-size:.7rem;color:var(--ink3);display:flex;align-items:center;justify-content:center;gap:.5rem}
+.sq-big{font-size:1.75rem;font-weight:900;color:var(--gold);margin-bottom:.3rem;line-height:1.2;font-family:'Cairo',sans-serif}
+.sq-meta{font-size:.75rem;color:var(--ink3);display:flex;align-items:center;justify-content:center;gap:.5rem}
 .dot{width:3px;height:3px;border-radius:50%;background:var(--ink3)}
-.code-pill{display:inline-flex;align-items:center;gap:.55rem;background:var(--c2);
-  border:1.5px dashed rgba(255,107,53,.25);border-radius:9px;padding:.4rem .8rem;margin:.55rem 0 .1rem}
+.code-pill{display:inline-flex;align-items:center;gap:.65rem;background:var(--c2);
+  border:1.5px dashed rgba(255,107,53,.25);border-radius:9px;padding:.5rem 1rem;margin:.75rem 0 .1rem}
 .cp-lbl{font-size:.68rem;color:var(--ink3)}
 .cp-val{font-family:'IBM Plex Mono',monospace;font-size:.92rem;font-weight:600;color:var(--gold);letter-spacing:.6px}
 .cp-btn{background:none;border:1px solid var(--br);color:var(--ink3);padding:.22rem .6rem;
@@ -2135,13 +2044,13 @@ select option{background:var(--c2)}
   display:flex;align-items:center;gap:.3rem}
 .cp-btn:hover{border-color:var(--gold);color:var(--gold)}
 
-.s4{display:grid;grid-template-columns:1fr 1fr;gap:.55rem;margin-bottom:.7rem}
-.sbox{background:var(--c1);border:1px solid var(--br);border-radius:4px 16px 4px 4px;padding:.7rem;text-align:center;position:relative;overflow:hidden}
+.s4{display:grid;grid-template-columns:1fr 1fr;gap:.7rem;margin-bottom:.9rem}
+.sbox{background:var(--c1);border:1px solid var(--br);border-radius:4px 16px 4px 4px;padding:1rem;text-align:center;position:relative;overflow:hidden}
 .sbox::after{content:'';position:absolute;bottom:-18px;right:-18px;width:60px;height:60px;border-radius:50%;background:currentColor;opacity:.03;pointer-events:none}
-.sbox-icon{display:flex;justify-content:center;margin-bottom:.3rem}
-.sbox-icon svg{width:16px;height:16px;opacity:.8}
-.sv{font-size:1.15rem;font-weight:700;font-family:'IBM Plex Mono',monospace;color:var(--gold);line-height:1;margin-bottom:.2rem}
-.sl{font-size:.6rem;color:var(--ink3);font-weight:500}
+.sbox-icon{display:flex;justify-content:center;margin-bottom:.4rem}
+.sbox-icon svg{width:20px;height:20px;opacity:.8}
+.sv{font-size:1.55rem;font-weight:700;font-family:'IBM Plex Mono',monospace;color:var(--gold);line-height:1;margin-bottom:.25rem}
+.sl{font-size:.67rem;color:var(--ink3);font-weight:500}
 .sbox.tc .sv{color:var(--teal)} .sbox.bc .sv{color:var(--blue)} .sbox.gc .sv{color:var(--green)}
 
 .tabs{display:flex;gap:.3rem;background:transparent;border:none;padding:0 0 .5rem;margin-bottom:.9rem;
@@ -2223,15 +2132,15 @@ select option{background:var(--c2)}
 .opp-nm{font-size:.88rem;font-weight:700;color:var(--ink);margin-bottom:.4rem}
 .opp-info{font-size:.75rem;color:var(--ink3);margin-bottom:.6rem}
 
-.mc{display:flex;align-items:center;gap:.65rem;background:var(--c2);border:1px solid var(--br);
-  border-radius:4px 16px 4px 4px;padding:.7rem;margin-bottom:.5rem;transition:border-color .2s,transform .15s;animation:fadeUp .4s ease both}
+.mc{display:flex;align-items:center;gap:.8rem;background:var(--c2);border:1px solid var(--br);
+  border-radius:4px 16px 4px 4px;padding:.9rem;margin-bottom:.55rem;transition:border-color .2s,transform .15s;animation:fadeUp .4s ease both}
 .mc:hover{transform:translateY(-1px)}
 .mc.is-me{border-color:rgba(255,107,53,.36);background:rgba(255,107,53,.04)}
-.mc-av{width:34px;height:34px;border-radius:38% 62% 63% 37% / 41% 44% 56% 59%;flex-shrink:0;
-  background:linear-gradient(135deg,var(--gold),var(--gd));color:#1a0f08;font-size:1rem;font-weight:900;
+.mc-av{width:40px;height:40px;border-radius:38% 62% 63% 37% / 41% 44% 56% 59%;flex-shrink:0;
+  background:linear-gradient(135deg,var(--gold),var(--gd));color:#1a0f08;font-size:1.15rem;font-weight:900;
   display:flex;align-items:center;justify-content:center}
 .mc-body{flex:1;min-width:0}
-.mc-name{font-size:.85rem;font-weight:700;display:flex;align-items:center;gap:.35rem;flex-wrap:wrap;}
+.mc-name{font-size:.9rem;font-weight:700;display:flex;align-items:center;gap:.4rem;flex-wrap:wrap;}
 .me-chip{font-size:.62rem;background:rgba(255,107,53,.14);color:var(--gold);padding:.1rem .45rem;
   border-radius:20px;border:1px solid rgba(255,107,53,.28);flex-shrink:0}
 .rank-chip{font-size:.6rem;background:rgba(96,165,250,.12);color:var(--blue);padding:.1rem .4rem;
@@ -2379,8 +2288,8 @@ select option{background:var(--c2)}
 .goal-del:hover{color:var(--red);background:rgba(248,113,113,.1)}
 
 @media(max-width:380px){
-  .h-title{font-size:1.7rem} .sq-big{font-size:1.15rem}
-  #clock{font-size:2.2rem;letter-spacing:3px} .sv{font-size:1.05rem}
+  .h-title{font-size:1.7rem} .sq-big{font-size:1.4rem}
+  #clock{font-size:2.2rem;letter-spacing:3px} .sv{font-size:1.3rem}
   .auth-title{font-size:1.5rem}
   .tabs{grid-template-columns:repeat(5,1fr)}
   .tab{font-size:.53rem;padding:.45rem .1rem}
@@ -2390,7 +2299,7 @@ select option{background:var(--c2)}
   .stats-grid{grid-template-columns:1fr 1fr}
   .wrap{padding:.8rem .6rem 6rem}
   .card{padding:1rem}
-  .sq-hero{padding:.9rem .8rem}
+  .sq-hero{padding:1.2rem 1rem}
 }
 
 .study-mode-row{display:grid;grid-template-columns:1fr 1fr;gap:.5rem;margin-bottom:.9rem}
@@ -2485,22 +2394,8 @@ select option{background:var(--c2)}
 .badge-title{font-size:.85rem;font-weight:700;color:var(--gold)}
 .badge-desc{font-size:.72rem;color:var(--ink3);margin-top:.1rem}
 
-/* ══ قفل الاشتراك التجريبي ══ */
-#trial-banner{display:none;align-items:center;justify-content:center;text-align:center;
-  gap:.4rem;background:linear-gradient(90deg,rgba(var(--accent-rgb),.15),rgba(var(--accent-rgb),.22),rgba(var(--accent-rgb),.15));
-  border:1px solid rgba(var(--accent-rgb),.35);color:var(--gold);font-weight:800;font-size:.78rem;
-  padding:.6rem .9rem;border-radius:12px;margin:0 0 .8rem}
-.tl-wrap{min-height:100vh;min-height:100dvh;display:flex;align-items:center;justify-content:center;
-  padding:1.5rem 1.1rem;box-sizing:border-box}
-.tl-box{background:var(--c1);border:1px solid var(--br);border-radius:var(--r);
-  padding:2.2rem 1.6rem;max-width:380px;width:100%;text-align:center;
-  box-shadow:0 10px 40px rgba(0,0,0,.35)}
-.tl-icon{font-size:3rem;margin-bottom:.9rem}
-.tl-title{font-size:1.15rem;font-weight:900;color:var(--gold);font-family:'Cairo',sans-serif;margin-bottom:.6rem}
-.tl-sub{font-size:.86rem;color:var(--ink2);line-height:1.8;margin-bottom:1.4rem}
-
 /* ══ المساعد الشخصي ══ */
-#bot-fab{position:fixed;bottom:calc(1.2rem + env(safe-area-inset-bottom));left:calc(1.2rem + env(safe-area-inset-left));z-index:500;display:none;
+#bot-fab{position:fixed;bottom:calc(1.2rem + env(safe-area-inset-bottom));left:1.2rem;z-index:500;display:none;
   width:56px;height:56px;border-radius:50%;border:none;cursor:pointer;
   background:linear-gradient(135deg,var(--accent),var(--accent-dark));
   font-size:1.5rem;align-items:center;justify-content:center;
@@ -2513,18 +2408,16 @@ select option{background:var(--c2)}
   background:rgba(0,0,0,.55);backdrop-filter:blur(6px)}
 #bot-modal.open{display:flex}
 .bot-sheet{background:var(--c1);border-radius:20px 20px 0 0;border-top:1px solid var(--br);
-  width:100%;max-width:460px;box-sizing:border-box;
-  height:78vh;height:78dvh;
-  max-height:calc(100vh - 1.5rem);max-height:calc(100dvh - 1.5rem);
-  display:flex;flex-direction:column;
-  animation:slideUp .25s ease;overflow:hidden;
-  padding-bottom:env(safe-area-inset-bottom)}
+  width:100%;max-width:460px;height:85dvh;height:85vh;max-height:640px;
+  display:flex;flex-direction:column;min-height:0;
+  animation:slideUp .25s ease;overflow:hidden}
 .bot-hd{display:flex;align-items:center;justify-content:space-between;
-  padding:1rem 1.1rem;border-bottom:1px solid var(--br);flex-shrink:0}
-.bot-hd-title{font-size:.95rem;font-weight:900;color:var(--gold);font-family:'Cairo',sans-serif}
-#bot-messages{flex:1;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:1rem 1.1rem;display:flex;flex-direction:column;gap:.6rem}
-.bot-msg{max-width:82%;padding:.65rem .9rem;border-radius:14px;font-size:.84rem;line-height:1.6;
-  animation:fadeUp .25s ease both}
+  padding:.9rem 1rem;border-bottom:1px solid var(--br);flex-shrink:0}
+.bot-hd-title{font-size:.9rem;font-weight:900;color:var(--gold);font-family:'Cairo',sans-serif}
+#bot-messages{flex:1 1 auto;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;
+  padding:1rem;display:flex;flex-direction:column;gap:.6rem}
+.bot-msg{max-width:85%;padding:.6rem .85rem;border-radius:14px;font-size:.82rem;line-height:1.6;
+  animation:fadeUp .25s ease both;word-break:break-word}
 .bot-msg-bot{align-self:flex-start;background:var(--c2);color:var(--ink);border:1px solid var(--br);
   border-bottom-right-radius:3px}
 .bot-msg-me{align-self:flex-end;background:linear-gradient(135deg,var(--accent),var(--accent-dark));
@@ -2535,14 +2428,20 @@ select option{background:var(--c2)}
 .bot-typing span:nth-child(2){animation-delay:.2s}
 .bot-typing span:nth-child(3){animation-delay:.4s}
 @keyframes botDot{0%,60%,100%{opacity:.3;transform:translateY(0)}30%{opacity:1;transform:translateY(-3px)}}
-#bot-quick-replies{display:flex;flex-wrap:wrap;gap:.5rem;padding:.9rem 1.1rem;
-  border-top:1px solid var(--br);flex-shrink:0;max-height:35vh;overflow-y:auto}
+#bot-quick-replies{display:flex;flex-wrap:wrap;gap:.4rem;padding:.8rem .9rem;
+  border-top:1px solid var(--br);flex-shrink:0;
+  padding-bottom:calc(.8rem + env(safe-area-inset-bottom))}
 #bot-quick-replies button{background:var(--c2);border:1.5px solid var(--br);color:var(--ink2);
-  padding:.5rem .85rem;border-radius:20px;font-size:.76rem;font-weight:700;cursor:pointer;
-  font-family:'Tajawal',sans-serif;transition:all .18s}
+  padding:.45rem .7rem;border-radius:20px;font-size:.7rem;font-weight:700;cursor:pointer;
+  font-family:'Tajawal',sans-serif;transition:all .18s;white-space:nowrap}
 #bot-quick-replies button:hover{border-color:rgba(var(--accent-rgb),.4);color:var(--gold)}
 .bot-paywall{text-align:center;padding:1.5rem 1rem;margin:auto}
 .bot-paywall-icon{font-size:2.6rem;margin-bottom:.6rem}
+@media (max-width:380px){
+  #bot-quick-replies{gap:.35rem;padding:.7rem .7rem}
+  #bot-quick-replies button{font-size:.66rem;padding:.4rem .6rem}
+  .bot-msg{font-size:.8rem;max-width:88%}
+}
 .bot-paywall-title{font-size:1rem;font-weight:900;color:var(--gold);margin-bottom:.5rem;font-family:'Cairo',sans-serif}
 .bot-paywall-sub{font-size:.82rem;color:var(--ink2);line-height:1.7;max-width:300px;margin:0 auto}
 
@@ -2853,8 +2752,6 @@ select option{background:var(--c2)}
 <!-- ══ SQUAD ══ -->
 
 <div id="s-squad" style="display:none">
-
-  <div id="trial-banner" style="display:none"></div>
 
   <div class="sq-hero">
     <div class="sq-big" id="sq-name">…</div>
@@ -3225,13 +3122,6 @@ select option{background:var(--c2)}
     </div>
   </div>
 
-</div>
-
-<!-- شاشة قفل الاشتراك التجريبي -->
-<div id="s-trial-lock" style="display:none">
-  <div class="tl-wrap">
-    <div class="tl-box" id="trial-lock-box"></div>
-  </div>
 </div>
 
 <!-- زر المساعد الشخصي العائم -->
