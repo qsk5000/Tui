@@ -2395,7 +2395,10 @@ select option{background:var(--c2)}
 .badge-desc{font-size:.72rem;color:var(--ink3);margin-top:.1rem}
 
 /* ══ المساعد الشخصي ══ */
-#bot-fab{position:fixed;bottom:calc(1.2rem + env(safe-area-inset-bottom));left:1.2rem;z-index:500;display:none;
+#bot-fab{position:fixed;
+  bottom:calc(1.2rem + env(safe-area-inset-bottom));
+  right:calc(1.2rem + env(safe-area-inset-right));
+  z-index:500;display:none;
   width:56px;height:56px;border-radius:50%;border:none;cursor:pointer;
   background:linear-gradient(135deg,var(--accent),var(--accent-dark));
   font-size:1.5rem;align-items:center;justify-content:center;
