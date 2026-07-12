@@ -272,8 +272,8 @@ window.loadAvailableSquads = async () => {
   if (!el) return;
   el.innerHTML = '<div style="text-align:center;color:var(--ink3);padding:1rem;font-size:.82rem">جاري التحميل...</div>';
   try {
-    const snap = await getDocs(collection(db,'squads'));
-    const avail = [];
+    // ← حد أقصى 50 فريق بالقراءة الوحدة، تحسباً لنمو عدد الفرق مستقبلاً
+    const snap = await getDocs(query(collection(db,'squads'), limit(50)));
     snap.forEach(d => {
       const sq = d.data();
       if (sq.members && sq.members.length < 5 && !sq.members.includes(uid)) {
@@ -368,10 +368,20 @@ window.kickMember = async (targetUid) => {
 };
 
 let currentSquad = null;
+let _myUserData  = null; // ← كاش لبيانات users/{uid} حتى ما نعيد قرائتها بأماكن ثانية
+
+// ← نحفظ دوال إلغاء الاشتراك (unsubscribe) لتجنب تراكم listeners
+// كل مرة ينصدي bootSquad (عند تغيير الفريق) لازم نقفل القديم أول
+let _unsubSquadDoc = null;
+let _lbRefreshInterval = null;
 
 function bootSquad() {
+  // نقفل أي listeners/intervals قديمة قبل ما نفتح جديدة
+  if (_unsubSquadDoc)      { _unsubSquadDoc(); _unsubSquadDoc = null; }
+  if (_lbRefreshInterval)  { clearInterval(_lbRefreshInterval); _lbRefreshInterval = null; }
+
   const membersCache = {};
-  onSnapshot(doc(db,'squads',squadId), async snap => {
+  _unsubSquadDoc = onSnapshot(doc(db,'squads',squadId), async snap => {
     if (!snap.exists()) {
       await updateDoc(doc(db,'users',uid), { squadId: null }).catch(()=>{});
       squadId = null;
@@ -427,23 +437,30 @@ function bootSquad() {
     }
   });
 
-  // تصنيف الفرق - onSnapshot مقبول (عدد قليل)
-  const lbQ = query(collection(db,'squads'), orderBy('totalPts','desc'));
-  onSnapshot(lbQ, snap => {
+  // تصنيف الفرق — بدّلناها من onSnapshot حي (يتفعّل مع أي تحديث نقطة لأي فريق بأي مكان،
+  // ويتضاعف مع عدد الطلاب المتصلين بنفس اللحظة = استهلاك قراءات هائل) إلى قراءة واحدة
+  // عند فتح الشاشة + تحديث كل دقيقة فقط. هذا يقلل القراءات بشكل كبير جداً.
+  const lbQ = query(collection(db,'squads'), orderBy('totalPts','desc'), limit(20));
+  async function refreshLeaderboard() {
     const el = G('lb-wrap');
     if (!el) return;
-    el.innerHTML = '';
-    const M = ['🥇','🥈','🥉'];
-    snap.docs.forEach((d,i) => {
-      const sq = d.data(), mine = d.id === squadId;
-      el.innerHTML += `<div class="lb-row${mine?' mine':''}">
-        <span class="lb-pos">${M[i]||'#'+(i+1)}</span>
-        <div class="lb-mid"><span class="lb-nm">${sq.badge} ${sq.name}</span><span class="lb-ct">${(sq.members||[]).length} أعضاء</span></div>
-        <div class="lb-end"><span class="lb-p">⚡${fmt(sq.totalPts||0)}</span><span class="lb-h">⏱${fmtH(sq.totalSec||0)}</span></div>
-      </div>`;
-    });
-    if (snap.empty) el.innerHTML = '<div class="lb-empty">لا توجد فرق بعد 🏁</div>';
-  });
+    try {
+      const snap = await getDocs(lbQ);
+      el.innerHTML = '';
+      const M = ['🥇','🥈','🥉'];
+      snap.docs.forEach((d,i) => {
+        const sq = d.data(), mine = d.id === squadId;
+        el.innerHTML += `<div class="lb-row${mine?' mine':''}">
+          <span class="lb-pos">${M[i]||'#'+(i+1)}</span>
+          <div class="lb-mid"><span class="lb-nm">${sq.badge} ${sq.name}</span><span class="lb-ct">${(sq.members||[]).length} أعضاء</span></div>
+          <div class="lb-end"><span class="lb-p">⚡${fmt(sq.totalPts||0)}</span><span class="lb-h">⏱${fmtH(sq.totalSec||0)}</span></div>
+        </div>`;
+      });
+      if (snap.empty) el.innerHTML = '<div class="lb-empty">لا توجد فرق بعد 🏁</div>';
+    } catch(e) { console.error('leaderboard load failed', e); }
+  }
+  refreshLeaderboard();
+  _lbRefreshInterval = setInterval(refreshLeaderboard, 60000); // تحديث كل دقيقة بدل الحي
 
   // تصنيف الأفراد - يُحمَّل مرة واحدة فقط عند الضغط على التاب
   let soloLoaded = false;
@@ -489,14 +506,14 @@ function bootSquad() {
     if (!el) return;
     el.innerHTML = '<div class="lb-empty">جاري التحميل...</div>';
     try {
-      const start = new Date(); start.setHours(0,0,0,0);
-      const snap = await getDocs(collection(db,'sessions'));
+      // ← الإصلاح: نفلتر بحقل date داخل الاستعلام بدل سحب كل جلسات كل الطلاب من الأزل
+      const todayStr = new Date().toISOString().slice(0,10);
+      const q = query(collection(db,'sessions'), where('date','==',todayStr));
+      const snap = await getDocs(q);
       const totals = {};
       snap.forEach(d => {
         const s = d.data();
-        if (!s.ts || !s.uid) return;
-        const t = s.ts.toDate ? s.ts.toDate() : new Date(s.ts);
-        if (t < start) return;
+        if (!s.uid) return;
         totals[s.uid] = (totals[s.uid]||0) + (s.seconds||0);
       });
       const slayers = Object.entries(totals)
@@ -536,6 +553,7 @@ function bootSquad() {
   onSnapshot(doc(db,'users',uid), snap => {
     if (!snap.exists()) return;
     const u = snap.data();
+    _myUserData = u; // ← نخزنها بمتغير عام حتى نستخدمها بمكان ثاني بدل قراءة جديدة
     setText('my-pts', fmt(u.totalPts||0));
     setText('my-hrs', fmtH(u.totalSec||0));
 
@@ -569,9 +587,8 @@ async function loadOpponentSquads() {
   if (!wrap) return;
   wrap.innerHTML = '<div style="text-align:center;color:var(--ink3)">جاري التحميل...</div>';
   try {
-    const snap = await getDocs(collection(db,'squads'));
-    wrap.innerHTML = '';
-    let count = 0;
+    // ← حد أقصى 50 فريق، نفس السبب
+    const snap = await getDocs(query(collection(db,'squads'), limit(50)));
     snap.forEach(d => {
       if (d.id === squadId) return;
       const sq = d.data();
@@ -1101,17 +1118,15 @@ function monsterStageFor(hpPercent) {
 }
 
 // مجموع ثواني الدراسة اليوم حسب حقل uid أو squadId
+// ← الإصلاح: نفلتر باليوم مباشرة داخل الاستعلام (بحقل date المخزون أصلاً بكل جلسة)
+// بدل ما نسحب كل تاريخ المستخدم/الفريق من الأزل ونفلتر بالجافاسكربت.
+// هذا يحول القراءة من "كل الجلسات اللي صارت أي يوم" إلى "جلسات اليوم فقط".
 async function sumTodaySecBy(field, value) {
-  const start = new Date(); start.setHours(0,0,0,0);
-  const q = query(collection(db,'sessions'), where(field,'==',value));
+  const todayStr = new Date().toISOString().slice(0,10);
+  const q = query(collection(db,'sessions'), where(field,'==',value), where('date','==',todayStr));
   const snap = await getDocs(q);
   let sec = 0;
-  snap.forEach(d => {
-    const s = d.data();
-    if (!s.ts) return;
-    const t = s.ts.toDate ? s.ts.toDate() : new Date(s.ts);
-    if (t >= start) sec += (s.seconds || 0);
-  });
+  snap.forEach(d => { sec += (d.data().seconds || 0); });
   return sec;
 }
 
@@ -1382,20 +1397,21 @@ async function loadStats(period) {
       startDate = null;
     }
 
-    // نجيب كل جلسات الطالب بدون orderBy لتجنب الحاجة لـ composite index
-    const q = query(collection(db,'sessions'), where('uid','==',uid));
+    // ← الإصلاح: نستخدم حقل date (نص بصيغة YYYY-MM-DD) للفلترة داخل الاستعلام نفسه
+    // بدل سحب كل جلسات الطالب من الأزل بكل مرة (حتى لفترة "اليوم" بس!).
+    // هذا يقلل القراءات بشكل كبير خصوصاً كلما تتراكم الجلسات بمرور الوقت.
+    // ملاحظة: أول مرة تشتغل هذا الاستعلام، فايربيس ممكن يطلب منك تسوي composite index
+    // (يعطيك رابط جاهز بالكونسول تضغط عليه وتنشئه بضغطة وحدة — خذلك دقيقة ويشتغل تلقائي).
+    let q;
+    if (startDate) {
+      const startStr = startDate.toISOString().slice(0,10);
+      q = query(collection(db,'sessions'), where('uid','==',uid), where('date','>=',startStr));
+    } else {
+      q = query(collection(db,'sessions'), where('uid','==',uid));
+    }
     const snap = await getDocs(q);
     let sessions = [];
     snap.forEach(d => sessions.push(d.data()));
-
-    // نفلتر حسب الفترة محلياً
-    if (startDate) {
-      sessions = sessions.filter(s => {
-        if (!s.ts) return false;
-        const t = s.ts.toDate ? s.ts.toDate() : new Date(s.ts);
-        return t >= startDate;
-      });
-    }
 
     // نرتب من الأحدث للأقدم محلياً
     sessions.sort((a, b) => {
@@ -1680,7 +1696,13 @@ function botTodaySubjectStats(sessions) {
   return map;
 }
 
+// كاش مؤقت (5 دقايق) — لو الطالب ضغط زر "شنو أدرس اليوم؟" أكثر من مرة بنفس الجلسة
+// ما نعيد سحب كل جلساته من جديد كل ضغطة
+let _weakestSubjCache = null, _weakestSubjCacheTime = 0;
 async function botGetWeakestSubject() {
+  if (_weakestSubjCache && (Date.now() - _weakestSubjCacheTime) < 5*60*1000) {
+    return _weakestSubjCache;
+  }
   try {
     const q = query(collection(db,'sessions'), where('uid','==',uid));
     const snap = await getDocs(q);
@@ -1691,7 +1713,10 @@ async function botGetWeakestSubject() {
     const entries = Object.entries(map);
     if (!entries.length) return null;
     entries.sort((a,b) => a[1]-b[1]);
-    return { subject: entries[0][0], sec: entries[0][1], total: entries.length };
+    const result = { subject: entries[0][0], sec: entries[0][1], total: entries.length };
+    _weakestSubjCache = result;
+    _weakestSubjCacheTime = Date.now();
+    return result;
   } catch(e) { console.error(e); return null; }
 }
 
@@ -1723,8 +1748,8 @@ window.openBotPanel = async () => {
   if (!wrap || wrap.dataset.opened) return; // ما نكرر رسالة الترحيب كل مرة يفتح التبويب
   wrap.dataset.opened = '1';
 
-  const uSnap = await getDoc(doc(db,'users',uid));
-  botUserData = uSnap.data() || {};
+  // نستخدم الكاش المحدَّث تلقائياً من الـ listener الحي بدل قراءة جديدة
+  botUserData = _myUserData || (await getDoc(doc(db,'users',uid))).data() || {};
   botAppendMsg('هلا بيك! 👋 أنا مساعدك الشخصي، رح أساعدك تنظم دراستك أول بأول.', 'bot');
 };
 
@@ -1780,8 +1805,10 @@ window.openAvatarModal = async () => {
   const modal = G('avatar-modal');
   modal.classList.add('open');
   try {
-    const uSnap = await getDoc(doc(db,'users',uid));
-    const current = uSnap.data()?.avatar || null;
+    // نستخدم الكاش المحدَّث تلقائياً من الـ listener الحي بدل قراءة جديدة
+    const current = _myUserData?.avatar
+      || (await getDoc(doc(db,'users',uid))).data()?.avatar
+      || null;
     document.querySelectorAll('#avatars-grid .avatar-opt').forEach(el => {
       el.classList.toggle('active', el.textContent.trim() === current);
     });
