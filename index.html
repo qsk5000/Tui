@@ -45,83 +45,6 @@ let isSaving = false;        // ← يمنع stopStudy تشتغل مرتين
 
 const G       = id => document.getElementById(id);
 
-// ══════════════════════════════════════════════
-// ══ نظام الاشتراك التجريبي — تفعيل يدوي + قفل تلقائي ══
-// كيفية التفعيل: بفايرستور، وثيقة users/{uid}، أضف حقل activated=true (Boolean)
-// من هذه اللحظة يبلش عد 3 أيام تلقائياً، وبعدها يقفل التطبيق كامل ويطلع صفحة الاشتراك
-// للاشتراك الدائم: أضف isPremium=true (يلغي القفل نهائياً بدون حد زمني)
-// ══════════════════════════════════════════════
-const TRIAL_DAYS = 3;
-let trialLocked = false;      // آخر حالة معروفة للقفل (نستخدمها نمنع تكرار نفس الشاشة)
-let trialWatchTimer = null;   // مؤقت يفحص كل دقيقة إذا خلصت المدة وقت ما التطبيق مفتوح
-
-function computeTrialState(u) {
-  if (!u) return { state:'waiting' };
-  if (u.isPremium) return { state:'premium' };
-  if (!u.activated) return { state:'waiting' };
-  if (!u.trialStart) return { state:'justActivated' }; // أول لحظة تفعيل، لسه ما انسجل وقت البداية
-  const start = u.trialStart.toDate ? u.trialStart.toDate() : new Date(u.trialStart);
-  const daysPassed = (Date.now() - start.getTime()) / 86400000;
-  if (daysPassed >= TRIAL_DAYS) return { state:'expired' };
-  return { state:'active', daysLeft: Math.max(1, Math.ceil(TRIAL_DAYS - daysPassed)) };
-}
-
-// يرجع true إذا التطبيق مقفول (وقد عرض شاشة القفل المناسبة)
-async function enforceTrialGate() {
-  const snap = await getDoc(doc(db,'users',uid));
-  if (!snap.exists()) return false; // نظام التسجيل يتكفل بيه لحاله
-  const u = snap.data();
-  let info = computeTrialState(u);
-
-  if (info.state === 'justActivated') {
-    // أول ما نكتشف activated=true بدون trialStart، نسجل لحظة البداية الآن
-    await updateDoc(doc(db,'users',uid), { trialStart: serverTimestamp() });
-    info = { state:'active', daysLeft: TRIAL_DAYS };
-  }
-
-  if (info.state === 'waiting') { showTrialLock('waiting'); trialLocked = true; return true; }
-  if (info.state === 'expired') { showTrialLock('expired'); trialLocked = true; return true; }
-
-  trialLocked = false;
-  updateTrialBanner(info);
-  return false;
-}
-
-function showTrialLock(kind) {
-  goScreen('s-trial-lock');
-  const box = G('trial-lock-box');
-  if (!box) return;
-  if (kind === 'waiting') {
-    box.innerHTML = `
-      <div class="tl-icon">⏳</div>
-      <div class="tl-title">حسابك لسه ما تفعّل</div>
-      <div class="tl-sub">تواصل وياي عشان أفعّل تجربتك المجانية وتقدر تستخدم منصة ميزان كاملة.</div>
-      <a class="btn btn-p" href="https://t.me/mizaniq1" target="_blank" rel="noopener" style="text-decoration:none">📩 تواصل للتفعيل</a>`;
-  } else {
-    box.innerHTML = `
-      <div class="tl-icon">🔒</div>
-      <div class="tl-title">خلصت مدة التجربة المجانية</div>
-      <div class="tl-sub">خلصت أيامك الـ${TRIAL_DAYS} بمنصة ميزان. اشترك الحين عشان تكمل وياك بدون توقف.</div>
-      <a class="btn btn-p" href="https://t.me/mizaniq1" target="_blank" rel="noopener" style="text-decoration:none">🚀 اشترك الآن</a>`;
-  }
-}
-
-function updateTrialBanner(info) {
-  const b = G('trial-banner');
-  if (!b) return;
-  if (info.state === 'active') {
-    b.style.display = 'flex';
-    b.textContent = `🎁 باقي ${info.daysLeft} يوم بتجربتك المجانية — اشترك بأي وقت من هنا`;
-  } else {
-    b.style.display = 'none';
-  }
-}
-
-function startTrialWatch() {
-  if (trialWatchTimer) clearInterval(trialWatchTimer);
-  trialWatchTimer = setInterval(() => { if (uid) enforceTrialGate(); }, 60000); // فحص كل دقيقة
-}
-
 const setText = (id,v) => { const e=G(id); if(e) e.textContent=v; };
 const fmt     = n => n>=1000?(n/1000).toFixed(1)+'K':String(n);
 const fmtH    = s => s>=3600?(s/3600).toFixed(1)+'س':s>=60?Math.floor(s/60)+'د':s+'ث';
@@ -180,7 +103,6 @@ onAuthStateChanged(auth, async u => {
     const userInfo  = document.getElementById('top-user-info');
     if (logoutBtn) logoutBtn.style.display = 'none';
     if (userInfo)  userInfo.style.display  = 'none';
-    if (trialWatchTimer) { clearInterval(trialWatchTimer); trialWatchTimer = null; }
     return;
   }
   uid = u.uid;
@@ -189,23 +111,11 @@ onAuthStateChanged(auth, async u => {
   if (logoutBtn) logoutBtn.style.display = 'block';
   if (userInfo)  userInfo.style.display  = 'block';
   await boot();
-
-  // مراقبة حية: إذا فعّلت اشتراك دائم أو انتهت التجربة وهو فاتح التطبيق، ينحدث فوراً
-  onSnapshot(doc(db,'users',uid), snap => {
-    if (!snap.exists()) return;
-    const wasLocked = trialLocked;
-    enforceTrialGate().then(isLocked => {
-      if (wasLocked && !isLocked) boot(); // انفتح الحساب وهو بشاشة القفل → رجّعه لمنصة
-    });
-  });
-  startTrialWatch();
 });
 
 async function boot() {
   const snap = await getDoc(doc(db,'users',uid));
   if (!snap.exists()) { goScreen('s-register'); return; }
-  const locked = await enforceTrialGate();
-  if (locked) return;
   const d = snap.data();
   if (!d.squadId) { prefillLobby(d); goScreen('s-lobby'); return; }
   squadId = d.squadId;
@@ -1604,7 +1514,7 @@ async function loadStats(period) {
 }
 
 function goScreen(id) {
-  ['s-auth','s-register','s-lobby','s-squad','s-trial-lock'].forEach(s => {
+  ['s-auth','s-register','s-lobby','s-squad'].forEach(s => {
     const el = G(s); if(el) el.style.display='none';
   });
   const target = G(id); if(target) target.style.display='block';
@@ -1736,7 +1646,6 @@ window.loadLectureHistory = async () => {
 // ══ المساعد الشخصي — يدك اليمنى بالدراسة ══
 // (مبني بالكامل على بيانات الطالب الحقيقية، بدون أي API خارجي)
 // ══════════════════════════════════════════════
-const BOT_TRIAL_DAYS = 3; // مدة التجربة المجانية المفتوحة بالكامل
 let botUserData = {}; // آخر نسخة من بيانات المستخدم (تتحدث لحظياً)
 
 const BOT_TIPS = [
@@ -1809,53 +1718,17 @@ function botRemoveTyping() {
   if (t) t.remove();
 }
 
-async function botCheckTrialStatus() {
-  const uSnap = await getDoc(doc(db,'users',uid));
-  const u = uSnap.data() || {};
-  botUserData = u;
-  if (u.isPremium) return { locked:false, premium:true };
-  if (!u.botTrialStart) {
-    await updateDoc(doc(db,'users',uid), { botTrialStart: serverTimestamp(), botUsageCount: 0 });
-    return { locked:false, premium:false, daysLeft: BOT_TRIAL_DAYS };
-  }
-  const start = u.botTrialStart.toDate ? u.botTrialStart.toDate() : new Date(u.botTrialStart);
-  const daysPassed = (Date.now() - start.getTime()) / 86400000;
-  if (daysPassed >= BOT_TRIAL_DAYS) return { locked:true, premium:false, usageCount: u.botUsageCount||0 };
-  return { locked:false, premium:false, daysLeft: Math.ceil(BOT_TRIAL_DAYS - daysPassed) };
-}
-
 window.openBotPanel = async () => {
   const wrap = G('bot-messages');
   if (!wrap || wrap.dataset.opened) return; // ما نكرر رسالة الترحيب كل مرة يفتح التبويب
   wrap.dataset.opened = '1';
 
-  const status = await botCheckTrialStatus();
-  if (status.locked) {
-    botShowPaywall(status.usageCount);
-    return;
-  }
-  const greeting = status.premium
-    ? 'هلا بيك! 👋 آمر شنو أساعدك اليوم؟'
-    : `هلا بيك! 👋 أنا مساعدك الشخصي، رح أساعدك تنظم دراستك أول بأول. عندك ${status.daysLeft} يوم متبقي بالتجربة المجانية 🎁`;
-  botAppendMsg(greeting, 'bot');
+  const uSnap = await getDoc(doc(db,'users',uid));
+  botUserData = uSnap.data() || {};
+  botAppendMsg('هلا بيك! 👋 أنا مساعدك الشخصي، رح أساعدك تنظم دراستك أول بأول.', 'bot');
 };
 
-function botShowPaywall(usageCount) {
-  const wrap = G('bot-messages');
-  wrap.innerHTML = `
-    <div class="bot-paywall">
-      <div class="bot-paywall-icon">🔒</div>
-      <div class="bot-paywall-title">خلصت أيام تجربتك المجانية</div>
-      <div class="bot-paywall-sub">خلال التجربة استخدمت مساعدك الشخصي <b>${usageCount}</b> مرة — لا تخليه يوقف عن مساعدتك بأهم فترة!</div>
-      <a class="btn btn-p" href="https://t.me/mizaniq1" target="_blank" rel="noopener" style="text-decoration:none;margin-top:.8rem">🚀 اشترك الآن وكمّل وياه</a>
-    </div>`;
-  G('bot-quick-replies').style.display = 'none';
-}
-
 window.botAsk = async (kind) => {
-  const status = await botCheckTrialStatus();
-  if (status.locked) { botShowPaywall(status.usageCount); return; }
-
   const labels = {
     plan:   '📚 شنو أدرس اليوم؟',
     today:  '📊 شلون وضعي اليوم؟',
@@ -1865,9 +1738,6 @@ window.botAsk = async (kind) => {
   };
   botAppendMsg(labels[kind] || '...', 'me');
   botAppendTyping();
-
-  // نزيد عداد الاستخدام (يفيدنا بعدين لعرض قيمة المساعد وقت القفل)
-  updateDoc(doc(db,'users',uid), { botUsageCount: increment(1) }).catch(()=>{});
 
   setTimeout(async () => {
     let reply = '...';
@@ -2885,8 +2755,6 @@ select option{background:var(--c2)}
 
 <div id="s-squad" style="display:none">
 
-  <div id="trial-banner" style="display:none"></div>
-
   <div class="sq-hero">
     <div class="sq-big" id="sq-name">…</div>
     <div class="sq-meta">
@@ -3284,13 +3152,6 @@ select option{background:var(--c2)}
     </div>
   </div>
 
-</div>
-
-<!-- شاشة قفل الاشتراك التجريبي -->
-<div id="s-trial-lock" style="display:none">
-  <div class="tl-wrap">
-    <div class="tl-box" id="trial-lock-box"></div>
-  </div>
 </div>
 
 </div><!-- end .wrap -->
