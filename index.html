@@ -7,6 +7,7 @@
 <title>ميزان — Squads | السادس الإعدادي</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@300;400;500;700;800;900&family=Cairo:wght@700;800;900&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js" defer></script>
 
 <script type="module">
 import { initializeApp }      from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
@@ -58,6 +59,22 @@ const SUBJECTS = {
   'أدبي': ['📖 عربي','🌍 إنجليزي','📜 تاريخ','🌐 جغرافية','💰 اقتصاد','⚖️ تربية وطنية']
 };
 const BADGES = ['🛡️','⚔️','🦅','🔥','🌟','💎','🦁','🚀','🏹','🌊','🐉','⚡'];
+
+// ══ نظام دعوة الأصدقاء (Referral) ══
+const REF_BONUS_INVITER = 100; // نقاط الطالب الداعي
+const REF_BONUS_INVITED = 50;  // نقاط الطالب الجديد المدعو
+const REF_STORAGE_KEY   = 'mizan_pending_ref';
+
+// نلتقط كود الدعوة من الرابط (?ref=UID) ونخزنه لحين إكمال التسجيل
+(function captureReferral() {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const ref = params.get('ref');
+    if (ref && ref.length > 5) {
+      localStorage.setItem(REF_STORAGE_KEY, ref);
+    }
+  } catch(e) {}
+})();
 
 const CHALLENGE_STATES = {
   pending: { label: '⏳ في الانتظار', color: '#fbbf24' },
@@ -172,6 +189,11 @@ window.doSignup = async () => {
       createdAt:serverTimestamp()
     });
     toast('تم التسجيل بنجاح! 🎉','ok');
+    const pendingRef = localStorage.getItem(REF_STORAGE_KEY);
+    if (pendingRef) {
+      localStorage.removeItem(REF_STORAGE_KEY);
+      await processReferral(res.user.uid, pendingRef, name);
+    }
   } catch(e) {
     const msg = e.code === 'auth/email-already-in-use' ? 'هذا البريد مسجّل بحساب من قبل' :
                 e.code === 'auth/weak-password' ? 'كلمة المرور ضعيفة، جرب كلمة أقوى' :
@@ -220,6 +242,11 @@ window.doRegister = async () => {
   }, { merge:true });
   prefillLobby({ name, branch });
   toast('أهلاً ' + name + ' 🎉','ok');
+  const pendingRef = localStorage.getItem(REF_STORAGE_KEY);
+  if (pendingRef) {
+    localStorage.removeItem(REF_STORAGE_KEY);
+    await processReferral(uid, pendingRef, name);
+  }
   goScreen('s-lobby');
 };
 
@@ -266,6 +293,30 @@ window.doJoin = async () => {
   goScreen('s-squad'); bootSquad();
   toast('انضممت لـ '+ sq.name +' 🎯','ok');
 };
+
+// يمنح مكافآت الدعوة للطالب الداعي والمدعو (يُستدعى مرة واحدة فقط عند إنشاء حساب جديد)
+async function processReferral(newUid, refUid, newUserName) {
+  try {
+    if (!refUid || refUid === newUid) return;
+    const refSnap = await getDoc(doc(db,'users',refUid));
+    if (!refSnap.exists()) return; // كود دعوة غير صالح
+
+    await updateDoc(doc(db,'users', refUid), {
+      totalPts: increment(REF_BONUS_INVITER),
+      referralCount: increment(1)
+    });
+    await updateDoc(doc(db,'users', newUid), {
+      totalPts: increment(REF_BONUS_INVITED),
+      referredBy: refUid
+    });
+    await setDoc(doc(db,'users',refUid,'referrals',newUid), {
+      name: newUserName || 'طالب جديد', ts: serverTimestamp()
+    });
+    toast(`🎉 حصلت ${REF_BONUS_INVITED} نقطة هدية انضمام!`,'ok');
+  } catch(e) {
+    console.error('referral processing failed', e);
+  }
+}
 
 window.loadAvailableSquads = async () => {
   const el = G('available-squads-wrap');
@@ -563,6 +614,11 @@ function bootSquad() {
     const rank = getStudentRank(u.totalPts||0);
     const userInfo = G('top-user-info');
     if (userInfo) userInfo.textContent = `${rank.icon} ${u.name} — ${rank.title}`;
+
+    setText('ref-count', fmt(u.referralCount||0));
+    setText('ref-pts',   fmt((u.referralCount||0)*REF_BONUS_INVITER));
+    const refLinkEl = G('ref-link-val');
+    if (refLinkEl) refLinkEl.textContent = getReferralLink();
 
     const sel = G('subj-sel');
     if (sel) {
@@ -945,6 +1001,7 @@ async function stopStudy() {
   flash('+'+pts+' ⚡');
   const tip = getMizanTip(sessionSecs);
   setTimeout(() => toast('💬 ' + tip, 'ok'), 1000);
+  setTimeout(() => openShareCard('study', { pts, subj, secs: sessionSecs }), 1400);
 
   await flushPendingPts();
   isSaving = false;
@@ -1002,6 +1059,91 @@ function renderClock() {
 function flash(t){ const e=G('pts-flash'); e.textContent=t; e.classList.add('on'); setTimeout(()=>e.classList.remove('on'),2200); }
 
 window.copyCode = () => { navigator.clipboard.writeText(G('sq-code').textContent).then(()=>toast('تم النسخ 📋','ok')); };
+
+function getReferralLink() {
+  return window.location.origin + window.location.pathname + '?ref=' + uid;
+}
+window.copyReferralLink = () => {
+  const link = getReferralLink();
+  navigator.clipboard.writeText(link).then(()=>toast('تم نسخ رابط الدعوة! شاركه ويا رفگاتك 📋','ok'));
+};
+window.shareReferralLink = async () => {
+  const link = getReferralLink();
+  const text = `انضم لمنصة الميزان التعليمية معي وخذ ${REF_BONUS_INVITED} نقطة هدية عند التسجيل! 🎓⚡`;
+  if (navigator.share) {
+    try { await navigator.share({ title:'ميزان', text, url: link }); }
+    catch(e) {}
+  } else {
+    navigator.clipboard.writeText(`${text}\n${link}`).then(()=>toast('تم نسخ رسالة الدعوة! 📋','ok'));
+  }
+};
+
+// ══ بطاقة مشاركة الإنجاز (ستوري) ══
+let shareCardBlob = null;
+
+window.closeShareModal = () => { G('share-modal').style.display = 'none'; };
+
+// type: 'study' أو 'lecture'
+window.openShareCard = async (type, data) => {
+  const modal = G('share-modal');
+  const img   = G('share-preview-img');
+  const loading = G('share-loading');
+  img.style.display = 'none';
+  loading.style.display = 'block';
+  modal.style.display = 'flex';
+  shareCardBlob = null;
+
+  const name = (_myUserData && _myUserData.name) || 'طالب ميزان';
+  if (type === 'study') {
+    setText('sc-emoji', '🔥');
+    setText('sc-headline', 'خلصت جلسة دراسة!');
+    setText('sc-mainstat', fmtH(data.secs));
+    setText('sc-substat', `${data.subj} · +${data.pts} نقطة ⚡`);
+  } else {
+    setText('sc-emoji', '🎬');
+    setText('sc-headline', 'شاهدت محاضرة جديدة!');
+    setText('sc-mainstat', (_myUserData ? getStudentRank(_myUserData.totalPts||0).icon : '📚'));
+    setText('sc-substat', 'مستمر بالدراسة مع ميزان 💪');
+  }
+  setText('sc-name', name);
+  const linkEl = G('sc-link');
+  if (linkEl) linkEl.textContent = getReferralLink().replace('https://','').replace('http://','');
+
+  try {
+    if (typeof html2canvas === 'undefined') { loading.textContent = 'تعذّر تحميل مولّد الصور، جرب الاتصال بالنت'; return; }
+    const canvas = await html2canvas(G('share-card-tpl'), { scale:2, backgroundColor:null });
+    const dataUrl = canvas.toDataURL('image/png');
+    img.src = dataUrl;
+    img.style.display = 'block';
+    loading.style.display = 'none';
+    canvas.toBlob(b => { shareCardBlob = b; }, 'image/png');
+  } catch(e) {
+    console.error('share card generation failed', e);
+    loading.textContent = 'تعذّر توليد الصورة';
+  }
+};
+
+window.downloadShareCard = () => {
+  const img = G('share-preview-img');
+  if (!img.src) return;
+  const a = document.createElement('a');
+  a.href = img.src;
+  a.download = 'mizan-story.png';
+  a.click();
+  toast('تم تحميل الصورة 📥','ok');
+};
+
+window.nativeShareCard = async () => {
+  if (!shareCardBlob) return toast('الصورة لسه ما جهزت، انتظر لحظة','warn');
+  const file = new File([shareCardBlob], 'mizan-story.png', { type:'image/png' });
+  if (navigator.canShare && navigator.canShare({ files:[file] })) {
+    try {
+      await navigator.share({ files:[file], title:'ميزان', text:'شاهد إنجازي بمنصة الميزان! ⚡' });
+      return;
+    } catch(e) {}
+  }
+  downloadShareCard();
+};
 window.switchRankTab = tab => {
   G('rpanel-squads').style.display  = tab==='squads'  ? 'block' : 'none';
   G('rpanel-solo').style.display    = tab==='solo'    ? 'block' : 'none';
@@ -2062,6 +2204,12 @@ select option{background:var(--c2)}
 .sq-big{font-size:1.75rem;font-weight:900;color:var(--gold);margin-bottom:.3rem;line-height:1.2;font-family:'Cairo',sans-serif}
 .sq-meta{font-size:.75rem;color:var(--ink3);display:flex;align-items:center;justify-content:center;gap:.5rem}
 .dot{width:3px;height:3px;border-radius:50%;background:var(--ink3)}
+.ref-card{background:linear-gradient(135deg,rgba(var(--accent-rgb),.14),var(--c2));border:1px solid rgba(var(--accent-rgb),.3);margin-bottom:.9rem}
+.ref-stats-row{display:flex;gap:.6rem;margin:.5rem 0 .7rem}
+.ref-stat{flex:1;background:var(--c1);border-radius:12px;padding:.6rem;text-align:center;border:1px solid var(--br)}
+.ref-stat-n{display:block;font-size:1.3rem;font-weight:900;color:var(--gold)}
+.ref-stat-l{display:block;font-size:.68rem;color:var(--ink3);margin-top:.15rem}
+.ref-hint{font-size:.76rem;color:var(--ink2);line-height:1.6;margin-bottom:.7rem}
 .code-pill{display:inline-flex;align-items:center;gap:.65rem;background:var(--c2);
   border:1.5px dashed rgba(255,107,53,.25);border-radius:9px;padding:.5rem 1rem;margin:.75rem 0 .1rem}
 .cp-lbl{font-size:.68rem;color:var(--ink3)}
@@ -2798,6 +2946,20 @@ select option{background:var(--c2)}
     </div>
   </div>
 
+  <div class="card ref-card">
+    <div class="sec-ttl">🎯 ادعُ رفگاتك واربح نقاط</div>
+    <div class="ref-stats-row">
+      <div class="ref-stat"><span class="ref-stat-n" id="ref-count">0</span><span class="ref-stat-l">صديق دعيته</span></div>
+      <div class="ref-stat"><span class="ref-stat-n" id="ref-pts">0</span><span class="ref-stat-l">نقطة من الدعوات</span></div>
+    </div>
+    <div class="ref-hint">كل صديق يسجل عن طريقك ياخذ <b>50</b> نقطة هدية، وانت تاخذ <b>100</b> نقطة فوراً! ⚡</div>
+    <div class="code-pill" style="width:100%;box-sizing:border-box">
+      <div style="overflow:hidden"><div class="cp-lbl">رابط دعوتك</div><div class="cp-val" id="ref-link-val" style="font-size:.7rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block">—</div></div>
+      <button class="cp-btn" onclick="copyReferralLink()">نسخ</button>
+    </div>
+    <button class="btn btn-p" style="margin-top:.6rem" onclick="shareReferralLink()">📤 شارك رابط الدعوة</button>
+  </div>
+
   <div class="s4">
     <div class="sbox">
       <div class="sbox-icon" style="color:var(--gold)">
@@ -3147,6 +3309,7 @@ select option{background:var(--c2)}
         <div id="lecture-player-box" style="position:relative;width:100%;padding-top:56.25%;border-radius:10px;overflow:hidden;background:#000">
           <div id="lecture-iframe" style="position:absolute;inset:0;width:100%;height:100%"></div>
         </div>
+        <button class="btn btn-t" style="margin-top:.6rem" onclick="openShareCard('lecture',{})">📤 شارك إنك شفت المحاضرة</button>
       </div>
     </div>
 
@@ -3240,6 +3403,47 @@ select option{background:var(--c2)}
       <div class="session-value" id="session-break-val">10 دقيقة</div>
     </div>
     <button class="btn btn-p" onclick="startSession()">🚀 ابدأ الجلسة</button>
+  </div>
+</div>
+
+<!-- MODAL: SHARE CARD (STORY) -->
+
+<div id="share-modal" class="session-modal">
+  <div class="session-content" style="text-align:center">
+    <div class="session-hd">
+      <span>📤 شارك إنجازك</span>
+      <button class="modal-close" onclick="closeShareModal()">✕</button>
+    </div>
+    <div id="share-preview-wrap" style="margin:.6rem 0 1rem;border-radius:14px;overflow:hidden;background:var(--c1);min-height:120px;display:flex;align-items:center;justify-content:center">
+      <span id="share-loading" style="color:var(--ink3);font-size:.85rem">⏳ جاري تجهيز الصورة…</span>
+      <img id="share-preview-img" style="width:100%;display:none"/>
+    </div>
+    <button class="btn btn-p" id="share-native-btn" onclick="nativeShareCard()">📲 مشاركة كستوري</button>
+    <button class="btn btn-t" style="margin-top:.5rem" onclick="downloadShareCard()">⬇️ تحميل الصورة</button>
+  </div>
+</div>
+
+<!-- القالب المخفي المستخدم لتوليد صورة البطاقة -->
+<div style="position:fixed;top:-9999px;left:-9999px">
+  <div id="share-card-tpl" style="width:600px;height:900px;padding:50px 40px;box-sizing:border-box;
+      background:linear-gradient(160deg,#1a1030 0%,#0a0710 55%,#241640 100%);
+      font-family:'Tajawal',sans-serif;color:#f3ede4;display:flex;flex-direction:column;
+      align-items:center;justify-content:space-between;text-align:center;direction:rtl">
+    <div style="width:100%">
+      <div style="font-family:'Cairo',sans-serif;font-weight:900;font-size:34px;color:#ff6b35;letter-spacing:1px">⚖️ ميزان</div>
+      <div style="font-size:15px;color:#b8aec2;margin-top:4px">منصة الميزان التعليمية · سادس إعدادي</div>
+    </div>
+    <div style="width:100%">
+      <div id="sc-emoji" style="font-size:70px;line-height:1">🔥</div>
+      <div id="sc-headline" style="font-family:'Cairo',sans-serif;font-weight:900;font-size:26px;margin-top:10px">إنجاز جديد!</div>
+      <div id="sc-mainstat" style="font-family:'IBM Plex Mono',monospace;font-weight:700;font-size:64px;color:#ff6b35;margin-top:18px">00:00</div>
+      <div id="sc-substat" style="font-size:17px;color:#f3ede4;margin-top:10px">—</div>
+      <div id="sc-name" style="font-size:15px;color:#b8aec2;margin-top:22px">—</div>
+    </div>
+    <div style="width:100%;border-top:1px solid rgba(255,255,255,.12);padding-top:16px">
+      <div style="font-size:14px;color:#f3ede4">انضم واربح 50 نقطة هدية 🎁</div>
+      <div id="sc-link" style="font-family:'IBM Plex Mono',monospace;font-size:13px;color:#ff6b35;margin-top:6px;word-break:break-all">mizaniq.online</div>
+    </div>
   </div>
 </div>
 
