@@ -134,7 +134,14 @@ async function boot() {
   const snap = await getDoc(doc(db,'users',uid));
   if (!snap.exists()) { goScreen('s-register'); return; }
   const d = snap.data();
-  if (!d.squadId) { prefillLobby(d); goScreen('s-lobby'); return; }
+  if (!d.squadId) {
+    prefillLobby(d);
+    goScreen('s-lobby');
+    // ✅ إصلاح: حتى لو الطالب حالياً بدون فريق (مثلاً خرج من فريق وجلسته
+    // كانت شغالة)، نستعيد أي مؤقت دراسة محفوظ محلياً بدل ما نفقده بالصمت
+    restoreStudyTimer();
+    return;
+  }
   squadId = d.squadId;
   goScreen('s-squad');
   bootSquad();
@@ -896,6 +903,7 @@ function startStudy() {
   if (pb) { pb.style.display = 'flex'; pb.textContent = '⏸'; pb.classList.add('paused-state'); }
   const subjEl = G('timer-subject-lbl');
   if (subjEl) { const sel = G('subj-sel'); subjEl.textContent = sel ? sel.value : '📚 جاري الدراسة'; }
+  resetTimerMotivation();
   renderClock();
 
   studyTick = setInterval(() => {
@@ -906,6 +914,7 @@ function startStudy() {
     }
     renderClock();
     if (sessionMode) updateSessionInfo();
+    if (studySec > 0 && studySec % 20 === 0) rotateMotiv();
 
     if (studySec >= 10800 && !threeHourWarned) {
       threeHourWarned = true;
@@ -919,7 +928,10 @@ function startStudy() {
       setTimeout(() => {
         if (isOnBreak) {
           isOnBreak = false;
-          toast('الاستراحة انتهت! ارجع للدراسة 💪','ok');
+          toast('الاستراحة انتهت! رجعنا نحسب وقتك 💪','ok');
+          // ✅ إصلاح: استئناف تلقائي — قبل هذا السطر كان العداد يبقى واقف للأبد
+          // لين الطالب يضغط زر الاستئناف يدوياً، وهذا كان يسبب فقدان ساعات دراسة حقيقية
+          resumeStudy();
         }
       }, sessionBreakTime * 1000);
     }
@@ -942,6 +954,9 @@ function pauseStudy() {
   studyTick = null;
   localStorage.removeItem('mizan_study_abs_start');
   localStorage.setItem('mizan_study_sec', studySec);
+  // ✅ إصلاح: قبل هذا السطر ما كان يتحدث فلاغ "active" عند الإيقاف المؤقت
+  // فيضل مسجل '1' بالـ localStorage وهو غلط (الجلسة متوقفة مؤقتاً مو شغالة)
+  localStorage.setItem('mizan_study_active', '0');
   G('study-btn').classList.remove('running');
   setText('study-lbl', '⏹ إنهاء الجلسة');
   const pb = G('pause-btn');
@@ -1015,8 +1030,15 @@ async function flushPendingPts() {
   const toSend = [...pending];
   localStorage.removeItem('mizan_pending_pts');
 
-  try {
-    for (const entry of toSend) {
+  // ✅ إصلاح: كل عنصر يُعالج بشكل مستقل بمحاولة/التقاط خاصة فيه.
+  // قبل هذا الإصلاح، لو عنصر واحد يفشل (مثلاً طالب بدون فريق squadId=null)
+  // كان يوقف كل الحلقة، فيعيد إدراج كل النقاط المعلقة من جديد للـ localStorage —
+  // وبما أن نقاط المستخدم (users) كانت تنزاد قبل فشل تحديث الفريق، بالمحاولة
+  // الجاية كانت تنزاد مرة ثانية (نقاط مكررة) لأن مستند الجلسة (session) ما كان
+  // يتسجل أبداً، فتضل هذي الحلقة تتكرر بلا نهاية بدون ما تنحل المشكلة.
+  let hadFailure = false;
+  for (const entry of toSend) {
+    try {
       const sessionDocId = entry.sessionId || ('sess_' + entry.ts);
       const sessionRef   = doc(db, 'sessions', sessionDocId);
 
@@ -1024,19 +1046,29 @@ async function flushPendingPts() {
       const existing = await getDoc(sessionRef);
       if (existing.exists()) continue;
 
-      await updateDoc(doc(db,'users', entry.uid),    { totalPts:increment(entry.pts), totalSec:increment(entry.secs) });
-      await updateDoc(doc(db,'squads',entry.squadId), { totalPts:increment(entry.pts), totalSec:increment(entry.secs) });
+      await updateDoc(doc(db,'users', entry.uid), { totalPts:increment(entry.pts), totalSec:increment(entry.secs) });
+
+      // ✅ إصلاح: إذا الطالب بدون فريق (squadId فارغ)، نتجاوز تحديث الفريق
+      // بدل ما نخلي الكود يرمي خطأ ويوقف كل شي
+      if (entry.squadId) {
+        await updateDoc(doc(db,'squads',entry.squadId), { totalPts:increment(entry.pts), totalSec:increment(entry.secs) });
+      }
 
       await setDoc(sessionRef, {
-        uid: entry.uid, squadId: entry.squadId, subject: entry.subj,
+        uid: entry.uid, squadId: entry.squadId || null, subject: entry.subj,
         seconds: entry.secs, pts: entry.pts, ts: serverTimestamp(),
         sessionMode, sessionTarget, mood: entry.mood || null,
         date: new Date().toISOString().slice(0,10)
       });
+    } catch (e) {
+      // نعيد فقط هذا العنصر الفاشل للقائمة المعلقة، مو كل القائمة
+      hadFailure = true;
+      const stillPending = JSON.parse(localStorage.getItem('mizan_pending_pts') || '[]');
+      stillPending.push(entry);
+      localStorage.setItem('mizan_pending_pts', JSON.stringify(stillPending));
     }
-  } catch(e) {
-    const stillPending = JSON.parse(localStorage.getItem('mizan_pending_pts') || '[]');
-    localStorage.setItem('mizan_pending_pts', JSON.stringify([...toSend, ...stillPending]));
+  }
+  if (hadFailure) {
     toast('لا يوجد اتصال — ستُحفظ النقاط عند عودة النت 📶','warn');
   }
 }
@@ -1055,6 +1087,84 @@ function renderClock() {
   const m = String(Math.floor(studySec%3600/60)).padStart(2,'0');
   const s = String(studySec%60).padStart(2,'0');
   setText('clock', h+':'+m+':'+s);
+  updateTimerRing();
+}
+
+// ══ عداد الدراسة المحفّز: حلقة تقدم + نقاط ربع الساعة + رسائل متحركة ══
+const TIMER_CIRC = 552.9; // محيط الدائرة نصف قطرها 88
+let lastQuarterHit = -1;
+
+const STUDY_MOTIV_MSGS = [
+  '🔥 يلا نبدأ! كل دقيقة تقربك من هدفك',
+  '💪 استمر، انت أقوى من الملل',
+  '🎯 ركّز على السؤال اللي جدامك بس',
+  '⚡ كل دقيقة دراسة = نقطة لك وللفريق',
+  '🚀 اليوم يوم تفوقك، خلّه يستاهل',
+  '🌟 لا تفكر بالساعة، فكر بالصفحة اللي جدامك',
+  '🧠 عقلك يتعلم أسرع وانت مركّز — كمّل',
+  '🏆 كل جلسة صغيرة تبني نجاحك الكبير',
+  '☕ خذ نفس عميق وكمّل، انت بالطريق الصح',
+  '📈 شوف تقدمك بالحلقة فوق — راح تكمّل الدورة!'
+];
+let motivIdx = 0;
+function rotateMotiv(){
+  const el = G('timer-motiv');
+  if (!el) return;
+  motivIdx = (motivIdx + 1) % STUDY_MOTIV_MSGS.length;
+  el.style.animation = 'none';
+  void el.offsetWidth;
+  el.style.animation = '';
+  el.textContent = STUDY_MOTIV_MSGS[motivIdx];
+}
+
+const TIMER_MILESTONE_MSGS = [
+  '🎉 ربع ساعة مركّزة! استمر كذا',
+  '🔥 نص ساعة إنجاز! انت تتسارع',
+  '💥 45 دقيقة قوة! ما تكدر توقف هسه',
+  '🏆 ساعة كاملة! وحش التسويف يرتجف منك 😤'
+];
+
+function updateTimerRing() {
+  const arc = G('timer-arc');
+  if (!arc) return;
+
+  let percent;
+  if (sessionMode && sessionTarget > 0) {
+    percent = Math.min(1, studySec / sessionTarget);
+  } else {
+    percent = (studySec % 3600) / 3600; // دورة كل ساعة
+  }
+  arc.style.strokeDashoffset = TIMER_CIRC * (1 - percent);
+
+  const withinHour  = studySec % 3600;
+  const quarterIdx  = Math.floor(withinHour / 900); // 0..3 ضمن الساعة الحالية
+  for (let i = 0; i < 4; i++) {
+    const dot = G('tq-' + i);
+    if (dot) dot.classList.toggle('done', i < quarterIdx);
+  }
+
+  const totalQuarters = Math.floor(studySec / 900);
+  if (totalQuarters > lastQuarterHit && studySec > 0) {
+    lastQuarterHit = totalQuarters;
+    arc.classList.remove('milestone-pop');
+    void arc.offsetWidth;
+    arc.classList.add('milestone-pop');
+    const msg = TIMER_MILESTONE_MSGS[(totalQuarters - 1) % 4];
+    if (msg) toast(msg, 'ok');
+  }
+}
+
+function resetTimerMotivation() {
+  // نضبط عداد الأرباع حسب الوقت الحالي فعلاً (يفيد عند استئناف جلسة) بدل ما نصفره دايماً
+  lastQuarterHit = Math.floor(studySec / 900);
+  motivIdx = 0;
+  const el = G('timer-motiv');
+  if (el) el.textContent = STUDY_MOTIV_MSGS[0];
+  if (studySec === 0) {
+    for (let i = 0; i < 4; i++) { const dot = G('tq-'+i); if (dot) dot.classList.remove('done'); }
+    const arc = G('timer-arc');
+    if (arc) { arc.style.transition = 'none'; arc.style.strokeDashoffset = TIMER_CIRC; void arc.offsetWidth; arc.style.transition = ''; }
+  }
 }
 function flash(t){ const e=G('pts-flash'); e.textContent=t; e.classList.add('on'); setTimeout(()=>e.classList.remove('on'),2200); }
 
@@ -2422,25 +2532,44 @@ select option{background:var(--c2)}
 
 #timer-box{display:none;flex-direction:column;align-items:center;justify-content:center;
   background:linear-gradient(160deg,rgba(10,18,32,.98),rgba(16,26,44,.98));
-  border-radius:22px;padding:1.8rem 1.2rem 1.4rem;margin-bottom:.8rem;
+  border-radius:26px;padding:1.5rem 1.2rem 1.3rem;margin-bottom:.8rem;
   border:1px solid rgba(255,107,53,.22);position:relative;overflow:hidden;
   box-shadow:0 0 50px rgba(255,107,53,.09), 0 20px 60px rgba(0,0,0,.5),inset 0 0 40px rgba(255,107,53,.04);}
 #timer-box::before{content:'';position:absolute;inset:0;
   background:radial-gradient(ellipse at 50% 20%,rgba(255,107,53,.11) 0%,transparent 60%);pointer-events:none}
 #timer-box::after{content:'';position:absolute;bottom:0;left:0;right:0;height:1px;
   background:linear-gradient(90deg,transparent,rgba(255,107,53,.3),transparent)}
+.timer-motiv{position:relative;z-index:1;font-size:.8rem;font-weight:700;color:var(--teal);
+  text-align:center;margin-bottom:.9rem;min-height:2.2em;display:flex;align-items:center;justify-content:center;
+  padding:0 .5rem;line-height:1.45;animation:motivIn .4s ease both}
+@keyframes motivIn{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:translateY(0)}}
 .timer-ring-wrap{position:relative;display:flex;align-items:center;justify-content:center;
-  width:100%;margin-bottom:.9rem}
-.timer-pulse-ring{position:absolute;width:160px;height:160px;border-radius:50%;
+  width:212px;height:212px;margin:0 auto .9rem}
+.timer-ring{position:absolute;inset:0;width:100%;height:100%;transform:rotate(-90deg)}
+.timer-track{fill:none;stroke:rgba(255,255,255,.06);stroke-width:9}
+.timer-fill{fill:none;stroke:var(--gold);stroke-width:9;stroke-linecap:round;
+  stroke-dasharray:552.9;stroke-dashoffset:552.9;
+  filter:drop-shadow(0 0 8px rgba(255,107,53,.75));transition:stroke-dashoffset .9s ease}
+.timer-fill.milestone-pop{animation:ringPop .5s ease}
+@keyframes ringPop{0%{filter:drop-shadow(0 0 8px rgba(255,107,53,.75))}
+  50%{filter:drop-shadow(0 0 22px rgba(255,215,120,1))}
+  100%{filter:drop-shadow(0 0 8px rgba(255,107,53,.75))}}
+.timer-pulse-ring{position:absolute;width:170px;height:170px;border-radius:50%;
   border:2px solid rgba(255,107,53,.12);animation:timerPulse 2.2s ease-in-out infinite;pointer-events:none}
 @keyframes timerPulse{0%,100%{transform:scale(1);opacity:.5}50%{transform:scale(1.06);opacity:.15}}
 .timer-inner{display:flex;flex-direction:column;align-items:center;gap:.25rem;position:relative;z-index:1}
 .timer-label-top{font-size:.72rem;font-weight:700;color:var(--gold);letter-spacing:.8px;
   text-transform:uppercase;opacity:.8;font-family:'Tajawal',sans-serif}
 .timer-label-bot{font-size:.65rem;color:var(--ink3);letter-spacing:.5px;font-family:'Tajawal',sans-serif}
-#clock{font-family:'IBM Plex Mono',monospace;font-size:clamp(2.4rem,9vw,3.2rem);font-weight:600;color:var(--gold);
-  letter-spacing:5px;text-shadow:0 0 30px rgba(255,107,53,.55),0 0 70px rgba(255,107,53,.18),0 0 4px rgba(255,107,53,.9);
+#clock{font-family:'IBM Plex Mono',monospace;font-size:clamp(2rem,7.6vw,2.6rem);font-weight:600;color:var(--gold);
+  letter-spacing:4px;text-shadow:0 0 30px rgba(255,107,53,.55),0 0 70px rgba(255,107,53,.18),0 0 4px rgba(255,107,53,.9);
   position:relative;z-index:1;line-height:1.1}
+.timer-quarters{display:flex;align-items:center;justify-content:center;gap:.4rem;position:relative;z-index:1;margin-bottom:1rem}
+.timer-quarter-dot{width:9px;height:9px;border-radius:50%;background:rgba(255,255,255,.08);
+  border:1px solid rgba(255,255,255,.12);transition:all .3s ease}
+.timer-quarter-dot.done{background:var(--gold);border-color:var(--gold);
+  box-shadow:0 0 10px rgba(255,107,53,.7);transform:scale(1.15)}
+.timer-quarter-lbl{font-size:.62rem;color:var(--ink3);letter-spacing:.4px}
 .timer-controls{display:flex;align-items:center;justify-content:center;gap:.8rem;position:relative;z-index:1}
 .timer-pause-btn{width:48px;height:48px;border-radius:50%;border:2px solid rgba(255,107,53,.35);
   background:rgba(255,107,53,.1);color:var(--gold);font-size:1.15rem;cursor:pointer;
@@ -2552,7 +2681,8 @@ select option{background:var(--c2)}
   color:var(--ink2);font-family:'Tajawal',sans-serif;font-size:.87rem;font-weight:700;
   padding:.8rem;cursor:pointer;transition:all .2s;display:flex;align-items:center;justify-content:center;gap:.45rem}
 .smode-btn svg{flex-shrink:0;transition:stroke .2s}
-.smode-btn.on{background:rgba(255,107,53,.1);border-color:rgba(255,107,53,.45);color:var(--gold)}
+.smode-btn.on{background:rgba(255,107,53,.1);border-color:rgba(255,107,53,.45);color:var(--gold);
+  box-shadow:0 0 0 1px rgba(255,107,53,.15) inset,0 4px 16px rgba(255,107,53,.18)}
 .smode-btn.on svg{stroke:var(--gold)}
 
 /* ══ POMODORO ══ */
@@ -3189,13 +3319,25 @@ select option{background:var(--c2)}
   </div>
 
   <div id="timer-box">
+    <div class="timer-motiv" id="timer-motiv">🔥 يلا نبدأ! كل دقيقة تقربك من هدفك</div>
     <div class="timer-ring-wrap">
+      <svg class="timer-ring" viewBox="0 0 200 200">
+        <circle class="timer-track" cx="100" cy="100" r="88"/>
+        <circle class="timer-fill"  cx="100" cy="100" r="88" id="timer-arc"/>
+      </svg>
       <div class="timer-pulse-ring"></div>
       <div class="timer-inner">
         <div class="timer-label-top" id="timer-subject-lbl">📚 جاري الدراسة</div>
         <div id="clock">00:00:00</div>
         <div class="timer-label-bot">الوقت المنقضي</div>
       </div>
+    </div>
+    <div class="timer-quarters" id="timer-quarters">
+      <span class="timer-quarter-dot" id="tq-0"></span>
+      <span class="timer-quarter-dot" id="tq-1"></span>
+      <span class="timer-quarter-dot" id="tq-2"></span>
+      <span class="timer-quarter-dot" id="tq-3"></span>
+      <span class="timer-quarter-lbl">ربع ساعة لكل نقطة ⚡</span>
     </div>
     <div class="timer-controls">
       <button id="pause-btn" class="timer-pause-btn" onclick="pauseResume()" style="display:none">⏸</button>
