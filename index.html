@@ -1980,59 +1980,128 @@ window.setAvatar = async (emoji) => {
 
 <style>
 :root{
-  --bg:    #0a0710;
-  --c1:    #150e20;
-  --c2:    #1f1530;
-  --c3:    #2a1e42;
-  --gold:  #ff6b35;
-  --gd:    #d9481a;
-  --glow:  rgba(255,107,53,.18);
-  --teal:  #62e58a;
-  --blue:  #7c9cff;
-  --green: #62e58a;
-  --red:   #ff3b5c;
-  --amber: #ffb84d;
-  --ink:   #f3ede4;
-  --ink2:  #b8aec2;
-  --ink3:  #6f6480;
-  --br:    rgba(185,139,255,.1);
-  --r:     15px;
+  --bg:    #0E0F12;
+  --c1:    #16171B;
+  --c2:    #1D1E23;
+  --c3:    #26272D;
+  --gold:  #D6A94A;
+  --gd:    #B88B32;
+  --glow:  rgba(214,169,74,.10);
+  --teal:  #4FB89A;
+  --blue:  #6C8CFF;
+  --green: #4FB89A;
+  --red:   #E5637A;
+  --amber: #D6A94A;
+  --ink:   #F2F2F0;
+  --ink2:  #9C9CA3;
+  --ink3:  #6A6A72;
+  --br:    rgba(255,255,255,.09);
+  --r:     10px;
   /* ثيم متغيرات — تتغير حسب اختيار الطالب */
-  --accent:      #ff6b35;
-  --accent-dark: #d9481a;
-  --accent-glow: rgba(255,107,53,.18);
-  --accent-rgb:  255,107,53;
-  --arcane:      #b98bff;
+  --accent:      #5B7FFF;
+  --accent-dark: #3F5FE0;
+  --accent-glow: rgba(91,127,255,.12);
+  --accent-rgb:  91,127,255;
+  --arcane:      #5B7FFF;
 }
 
 /* ══ الثيمات ══ */
 body.theme-purple{
-  --bg:#07040f; --c1:#120b1e; --c2:#1a1030; --c3:#241640;
-  --accent:#a78bfa; --accent-dark:#7c3aed; --accent-glow:rgba(167,139,250,.16); --accent-rgb:167,139,250;
-  --gold:#a78bfa; --gd:#7c3aed; --glow:rgba(167,139,250,.16);
+  --bg:#0F0E14; --c1:#17161E; --c2:#1E1D27; --c3:#272631;
+  --accent:#8B7FE8; --accent-dark:#6C5FD6; --accent-glow:rgba(139,127,232,.12); --accent-rgb:139,127,232;
+  --gold:#C9A55C; --gd:#A98639; --glow:rgba(201,165,92,.1);
 }
 body.theme-emerald{
-  --bg:#030f0a; --c1:#071a10; --c2:#0d2518; --c3:#133020;
-  --accent:#34d399; --accent-dark:#059669; --accent-glow:rgba(52,211,153,.16); --accent-rgb:52,211,153;
-  --gold:#34d399; --gd:#059669; --glow:rgba(52,211,153,.16);
+  --bg:#0B120F; --c1:#131C17; --c2:#1A251F; --c3:#232F28;
+  --accent:#4FB89A; --accent-dark:#38A183; --accent-glow:rgba(79,184,154,.12); --accent-rgb:79,184,154;
+  --gold:#C9A55C; --gd:#A98639; --glow:rgba(201,165,92,.1);
 }
 body.theme-rose{
-  --bg:#0f0608; --c1:#1e0c10; --c2:#2d1118; --c3:#3d1620;
-  --accent:#fb7185; --accent-dark:#e11d48; --accent-glow:rgba(251,113,133,.16); --accent-rgb:251,113,133;
-  --gold:#fb7185; --gd:#e11d48; --glow:rgba(251,113,133,.16);
+  --bg:#130F11; --c1:#1B1618; --c2:#231C1F; --c3:#2D2427;
+  --accent:#D6748A; --accent-dark:#C05674; --accent-glow:rgba(214,116,138,.12); --accent-rgb:214,116,138;
+  --gold:#C9A55C; --gd:#A98639; --glow:rgba(201,165,92,.1);
 }
 body.theme-sky{
-  --bg:#040810; --c1:#0a1220; --c2:#101c30; --c3:#162640;
-  --accent:#38bdf8; --accent-dark:#0284c7; --accent-glow:rgba(56,189,248,.16); --accent-rgb:56,189,248;
-  --gold:#38bdf8; --gd:#0284c7; --glow:rgba(56,189,248,.16);
+  --bg:#0B0F13; --c1:#131A20; --c2:#1A2229; --c3:#232D35;
+  --accent:#5B9FE8; --accent-dark:#3E82CC; --accent-glow:rgba(91,159,232,.12); --accent-rgb:91,159,232;
+  --gold:#C9A55C; --gd:#A98639; --glow:rgba(201,165,92,.1);
 }
 body.theme-light{
-  --bg:#f1f5f9; --c1:#ffffff; --c2:#f8fafc; --c3:#e2e8f0;
-  --accent:#ff6b35; --accent-dark:#d9481a; --accent-glow:rgba(255,107,53,.2); --accent-rgb:255,107,53;
-  --gold:#d9481a; --gd:#b45309; --glow:rgba(217,72,26,.2);
-  --ink:#1e293b; --ink2:#475569; --ink3:#94a3b8; --br:rgba(0,0,0,.08);
-  --red:#dc2626; --green:#16a34a; --teal:#0d9488;
+  --bg:#F7F7F5; --c1:#FFFFFF; --c2:#F1F1EF; --c3:#E7E7E4;
+  --accent:#3F5FE0; --accent-dark:#3049B8; --accent-glow:rgba(63,95,224,.1); --accent-rgb:63,95,224;
+  --gold:#A9791F; --gd:#8C6318; --glow:rgba(169,121,31,.1);
+  --ink:#1C1C1E; --ink2:#5B5B60; --ink3:#8C8C91; --br:rgba(0,0,0,.1);
+  --red:#C43D53; --green:#2F8F6F; --teal:#2F8F6F;
 }
+
+/* ══════════════════════════════════════════════
+   طبقة تحديث الواجهة — تصميم أبسط وأحدث، بلا زخرفة
+   (تُطبّق فوق الأنماط الأصلية بدون المساس بالبنية)
+   ══════════════════════════════════════════════ */
+*{ -webkit-tap-highlight-color:transparent }
+body::before{ display:none !important; }
+
+.topbar{ background:var(--bg) !important; backdrop-filter:none !important; border-bottom:1px solid var(--br) !important; }
+.brand-logo{ background:var(--accent) !important; box-shadow:none !important; color:var(--bg) !important; border-radius:8px !important; }
+.brand-name{ background:none !important; -webkit-text-fill-color:var(--ink) !important; color:var(--ink) !important; }
+
+.auth-icon{ animation:none !important; filter:none !important; }
+.auth-title,.h-title{ background:none !important; -webkit-text-fill-color:var(--ink) !important; color:var(--ink) !important; font-weight:800 !important; }
+.auth-form{ border-radius:var(--r) !important; border-right:1px solid var(--br) !important; box-shadow:none !important; }
+.auth-form h3{ color:var(--ink) !important; }
+
+.card{ border-radius:var(--r) !important; border-right:1px solid var(--br) !important; box-shadow:none !important; }
+.card::before{ display:none !important; }
+.sec-ttl{ color:var(--ink) !important; }
+.sec-ttl::after{ background:var(--br) !important; }
+
+input,select,.auth-form input{ border-radius:8px !important; }
+.bb.sel{ box-shadow:none !important; border-color:var(--accent) !important; background:rgba(var(--accent-rgb),.08) !important; color:var(--accent) !important; }
+.bb:hover{ border-color:rgba(var(--accent-rgb),.35) !important; }
+
+.btn{ clip-path:none !important; border-radius:10px !important; }
+.btn-p{ background:var(--accent) !important; color:var(--bg) !important; box-shadow:none !important; }
+.btn-p:hover:not(:disabled){ transform:none !important; background:var(--accent-dark) !important; box-shadow:none !important; }
+.btn-p:active{ transform:none !important; }
+.btn-study{ background:var(--green) !important; box-shadow:none !important; color:var(--bg) !important; }
+.btn-study:hover:not(:disabled){ transform:none !important; box-shadow:none !important; }
+.btn-study.running{ background:var(--red) !important; animation:none !important; box-shadow:none !important; }
+
+.sq-hero{ background:var(--c1) !important; border:1px solid var(--br) !important; border-radius:var(--r) !important; }
+.sq-hero::after{ display:none !important; }
+.sq-big{ color:var(--ink) !important; }
+.ref-card{ background:var(--c1) !important; border:1px solid var(--br) !important; border-radius:var(--r) !important; }
+.code-pill{ border:1px solid var(--br) !important; border-radius:8px !important; }
+.sbox,.stat-card,.goal-item,.badge-row{ border-radius:var(--r) !important; }
+.sbox::after,.stat-card::before{ display:none !important; }
+
+.tab.on{ color:var(--accent) !important; }
+.tab.on svg{ stroke:var(--accent) !important; filter:none !important; }
+.tab.on::after{ background:var(--accent) !important; box-shadow:none !important; width:40% !important; }
+
+.theme-modal{ backdrop-filter:none !important; }
+.avatar-opt{ border-radius:14px !important; }
+.theme-card:hover{ transform:none !important; box-shadow:none !important; }
+
+.challenge-card{ background:var(--c1) !important; border-radius:var(--r) !important; }
+.pomo-main{ background:var(--accent) !important; box-shadow:none !important; color:var(--bg) !important; }
+.pomo-main:hover{ transform:none !important; box-shadow:none !important; }
+.pomo-main.running{ background:var(--red) !important; box-shadow:none !important; animation:none !important; }
+.pomo-fill{ stroke:var(--accent) !important; }
+.pomo-dot.done{ background:var(--accent) !important; border-color:var(--accent) !important; box-shadow:none !important; }
+.pomo-dot.active{ border-color:var(--accent) !important; animation:none !important; }
+
+.toast{ border-radius:10px !important; box-shadow:none !important; }
+.rank-tab.on,.stats-period-btn.on{ box-shadow:none !important; color:var(--accent) !important; }
+.mood-btn.selected{ box-shadow:none !important; border-color:var(--accent) !important; }
+.mood-btn:hover{ transform:none !important; }
+.mood-modal-overlay,.session-modal,.share-modal{ backdrop-filter:none !important; }
+
+.ad-banner{ display:none !important; } /* البانر الإعلاني المتحرك يخالف الاتجاه الجديد الهادئ */
+
+.bot-msg-me{ background:var(--accent) !important; color:var(--bg) !important; }
+</style>
+<style>
 
 /* ══ زر الثيم في التوب بار ══ */
 .theme-btn{background:none;border:1px solid var(--br);color:var(--ink3);
@@ -3426,23 +3495,23 @@ select option{background:var(--c2)}
 <!-- القالب المخفي المستخدم لتوليد صورة البطاقة -->
 <div style="position:fixed;top:-9999px;left:-9999px">
   <div id="share-card-tpl" style="width:600px;height:900px;padding:50px 40px;box-sizing:border-box;
-      background:linear-gradient(160deg,#1a1030 0%,#0a0710 55%,#241640 100%);
-      font-family:'Tajawal',sans-serif;color:#f3ede4;display:flex;flex-direction:column;
+      background:#0E0F12;border:1px solid rgba(255,255,255,.08);
+      font-family:'Tajawal',sans-serif;color:#F2F2F0;display:flex;flex-direction:column;
       align-items:center;justify-content:space-between;text-align:center;direction:rtl">
     <div style="width:100%">
-      <div style="font-family:'Cairo',sans-serif;font-weight:900;font-size:34px;color:#ff6b35;letter-spacing:1px">⚖️ ميزان</div>
-      <div style="font-size:15px;color:#b8aec2;margin-top:4px">منصة الميزان التعليمية · سادس إعدادي</div>
+      <div style="font-family:'Cairo',sans-serif;font-weight:800;font-size:32px;color:#F2F2F0;letter-spacing:.5px">⚖️ ميزان</div>
+      <div style="font-size:15px;color:#9C9CA3;margin-top:4px">منصة الميزان التعليمية · سادس إعدادي</div>
     </div>
     <div style="width:100%">
-      <div id="sc-emoji" style="font-size:70px;line-height:1">🔥</div>
-      <div id="sc-headline" style="font-family:'Cairo',sans-serif;font-weight:900;font-size:26px;margin-top:10px">إنجاز جديد!</div>
-      <div id="sc-mainstat" style="font-family:'IBM Plex Mono',monospace;font-weight:700;font-size:64px;color:#ff6b35;margin-top:18px">00:00</div>
-      <div id="sc-substat" style="font-size:17px;color:#f3ede4;margin-top:10px">—</div>
-      <div id="sc-name" style="font-size:15px;color:#b8aec2;margin-top:22px">—</div>
+      <div id="sc-emoji" style="font-size:64px;line-height:1">🔥</div>
+      <div id="sc-headline" style="font-family:'Cairo',sans-serif;font-weight:800;font-size:24px;margin-top:10px;color:#F2F2F0">إنجاز جديد!</div>
+      <div id="sc-mainstat" style="font-family:'IBM Plex Mono',monospace;font-weight:700;font-size:60px;color:#5B7FFF;margin-top:16px">00:00</div>
+      <div id="sc-substat" style="font-size:16px;color:#D6A94A;margin-top:10px">—</div>
+      <div id="sc-name" style="font-size:14px;color:#9C9CA3;margin-top:22px">—</div>
     </div>
-    <div style="width:100%;border-top:1px solid rgba(255,255,255,.12);padding-top:16px">
-      <div style="font-size:14px;color:#f3ede4">انضم واربح 50 نقطة هدية 🎁</div>
-      <div id="sc-link" style="font-family:'IBM Plex Mono',monospace;font-size:13px;color:#ff6b35;margin-top:6px;word-break:break-all">mizaniq.online</div>
+    <div style="width:100%;border-top:1px solid rgba(255,255,255,.1);padding-top:16px">
+      <div style="font-size:14px;color:#F2F2F0">انضم واربح 50 نقطة هدية 🎁</div>
+      <div id="sc-link" style="font-family:'IBM Plex Mono',monospace;font-size:13px;color:#5B7FFF;margin-top:6px;word-break:break-all">mizaniq.online</div>
     </div>
   </div>
 </div>
