@@ -1060,8 +1060,9 @@ function flash(t){ const e=G('pts-flash'); e.textContent=t; e.classList.add('on'
 
 window.copyCode = () => { navigator.clipboard.writeText(G('sq-code').textContent).then(()=>toast('تم النسخ 📋','ok')); };
 
+const REF_BASE_URL = 'https://mizaniq.online/';
 function getReferralLink() {
-  return window.location.origin + window.location.pathname + '?ref=' + uid;
+  return REF_BASE_URL + '?ref=' + uid;
 }
 window.copyReferralLink = () => {
   const link = getReferralLink();
