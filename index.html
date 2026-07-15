@@ -1,5 +1,4 @@
 <!DOCTYPE html>
-
 <html lang="ar" dir="rtl">
 <head>
 <meta charset="UTF-8">
@@ -332,6 +331,7 @@ window.loadAvailableSquads = async () => {
   try {
     // ← حد أقصى 50 فريق بالقراءة الوحدة، تحسباً لنمو عدد الفرق مستقبلاً
     const snap = await getDocs(query(collection(db,'squads'), limit(50)));
+    let avail = [];
     snap.forEach(d => {
       const sq = d.data();
       if (sq.members && sq.members.length < 5 && !sq.members.includes(uid)) {
@@ -652,6 +652,7 @@ async function loadOpponentSquads() {
   try {
     // ← حد أقصى 50 فريق، نفس السبب
     const snap = await getDocs(query(collection(db,'squads'), limit(50)));
+    let count = 0;
     snap.forEach(d => {
       if (d.id === squadId) return;
       const sq = d.data();
@@ -880,6 +881,61 @@ window.confirmMoodAndStart = () => {
 window.toggleStudy  = () => { studyActive ? stopStudy() : openMoodCheck(); };
 window.pauseResume  = () => { studyActive ? pauseStudy() : resumeStudy(); };
 
+/* ══ تحسينات بصرية للعداد — حلقة التقدم، الشارات، النقاط اللحظية، رسائل التحفيز ══ */
+const TIMER_MILESTONE_ICONS = ['🌱','🔥','⚡','💎','🏆'];
+const TIMER_RING_CIRC = 2 * Math.PI * 54; // نفس نصف قطر دائرة SVG بالحلقة
+
+function renderTimerMilestones(hoursDone) {
+  const wrap = G('timer-milestones');
+  if (!wrap) return;
+  if (wrap.dataset.hours == hoursDone) return; // نتجنب إعادة رسم غير ضرورية كل ثانية
+  wrap.dataset.hours = hoursDone;
+  wrap.innerHTML = '';
+  const shown = Math.min(hoursDone, 6);
+  for (let i = 0; i < shown; i++) {
+    const s = document.createElement('span');
+    s.className = 'tm-dot done';
+    s.textContent = TIMER_MILESTONE_ICONS[Math.min(i, TIMER_MILESTONE_ICONS.length - 1)];
+    wrap.appendChild(s);
+  }
+  const ghost = document.createElement('span');
+  ghost.className = 'tm-dot next';
+  ghost.textContent = TIMER_MILESTONE_ICONS[Math.min(shown, TIMER_MILESTONE_ICONS.length - 1)];
+  wrap.appendChild(ghost);
+}
+
+function updateTimerVisuals(sec) {
+  // حلقة التقدم — تمتلئ كل ساعة وترجع تبدأ من جديد (إحساس بإنجاز متكرر)
+  const arc = G('timer-progress-arc');
+  if (arc) {
+    const ratio = (sec % 3600) / 3600;
+    arc.style.strokeDashoffset = TIMER_RING_CIRC * (1 - ratio);
+  }
+  // النقاط اللحظية
+  setText('timer-livepts', '⚡ ' + Math.floor(sec/60) + ' نقطة حتى الآن');
+  // شارات الساعات المكتملة بهذي الجلسة
+  renderTimerMilestones(Math.floor(sec/3600));
+  // رسالة تحفيزية تتجدد كل 5 دقائق بدل ما تبقى ثابتة طول الجلسة
+  const mEl = G('timer-motivate');
+  if (mEl) {
+    const bucket = Math.floor(sec/300);
+    if (mEl.dataset.bucket != bucket) {
+      mEl.dataset.bucket = bucket;
+      mEl.textContent = '💬 ' + mizanTips[bucket % mizanTips.length];
+    }
+  }
+}
+
+function resetTimerVisuals() {
+  const arc = G('timer-progress-arc');
+  if (arc) arc.style.strokeDashoffset = TIMER_RING_CIRC;
+  const wrap = G('timer-milestones');
+  if (wrap) { wrap.innerHTML = ''; wrap.dataset.hours = '-1'; }
+  const mEl = G('timer-motivate');
+  if (mEl) { mEl.dataset.bucket = '-1'; mEl.textContent = '💬 ابدأ وشوف كيف الوقت يمر بسرعة، خطوة خطوة توصل 💪'; }
+  setText('timer-livepts', '⚡ 0 نقطة حتى الآن');
+}
+
 function startStudy() {
   if (studyTick) { clearInterval(studyTick); studyTick = null; }
   studyActive     = true;
@@ -900,11 +956,11 @@ function startStudy() {
   setText('study-lbl', '⏹ إنهاء الجلسة');
   G('timer-box').style.display = 'flex';
   const pb = G('pause-btn');
-  if (pb) { pb.style.display = 'flex'; pb.textContent = '⏸'; pb.classList.add('paused-state'); }
+  if (pb) { pb.style.display = 'flex'; pb.textContent = '⏸ إيقاف مؤقت'; pb.classList.add('paused-state'); }
   const subjEl = G('timer-subject-lbl');
   if (subjEl) { const sel = G('subj-sel'); subjEl.textContent = sel ? sel.value : '📚 جاري الدراسة'; }
-  resetTimerMotivation();
   renderClock();
+  updateTimerVisuals(studySec);
 
   studyTick = setInterval(() => {
     // ✅ الحساب دائماً من absStart — لا يتأثر بتأخير setInterval
@@ -913,8 +969,8 @@ function startStudy() {
       studySec = Math.floor((Date.now() - absStart) / 1000);
     }
     renderClock();
+    updateTimerVisuals(studySec);
     if (sessionMode) updateSessionInfo();
-    if (studySec > 0 && studySec % 20 === 0) rotateMotiv();
 
     if (studySec >= 10800 && !threeHourWarned) {
       threeHourWarned = true;
@@ -960,7 +1016,7 @@ function pauseStudy() {
   G('study-btn').classList.remove('running');
   setText('study-lbl', '⏹ إنهاء الجلسة');
   const pb = G('pause-btn');
-  if (pb) { pb.textContent = '▶'; pb.classList.remove('paused-state'); }
+  if (pb) { pb.textContent = '▶ استمرار'; pb.classList.remove('paused-state'); }
 }
 
 function resumeStudy() {
@@ -973,8 +1029,9 @@ function stopStudyQuiet() {
   clearInterval(studyTick);
   studySec = 0;
   const pb = G('pause-btn');
-  if (pb) { pb.style.display = 'none'; pb.textContent = '⏸'; pb.classList.add('paused-state'); }
+  if (pb) { pb.style.display = 'none'; pb.textContent = '⏸ إيقاف مؤقت'; pb.classList.add('paused-state'); }
   clearStudyState();
+  resetTimerVisuals();
 }
 
 async function stopStudy() {
@@ -987,8 +1044,9 @@ async function stopStudy() {
   setText('study-lbl', '▶ ابدأ الدراسة');
   G('timer-box').style.display = 'none';
   const pb = G('pause-btn');
-  if (pb) { pb.style.display = 'none'; pb.textContent = '⏸'; pb.classList.add('paused-state'); }
+  if (pb) { pb.style.display = 'none'; pb.textContent = '⏸ إيقاف مؤقت'; pb.classList.add('paused-state'); }
   clearStudyState();
+  resetTimerVisuals();
 
   if (studySec < 60) {
     toast('الجلسة أقل من دقيقة — لم تُحتسب','warn');
@@ -1087,84 +1145,6 @@ function renderClock() {
   const m = String(Math.floor(studySec%3600/60)).padStart(2,'0');
   const s = String(studySec%60).padStart(2,'0');
   setText('clock', h+':'+m+':'+s);
-  updateTimerRing();
-}
-
-// ══ عداد الدراسة المحفّز: حلقة تقدم + نقاط ربع الساعة + رسائل متحركة ══
-const TIMER_CIRC = 552.9; // محيط الدائرة نصف قطرها 88
-let lastQuarterHit = -1;
-
-const STUDY_MOTIV_MSGS = [
-  '🔥 يلا نبدأ! كل دقيقة تقربك من هدفك',
-  '💪 استمر، انت أقوى من الملل',
-  '🎯 ركّز على السؤال اللي جدامك بس',
-  '⚡ كل دقيقة دراسة = نقطة لك وللفريق',
-  '🚀 اليوم يوم تفوقك، خلّه يستاهل',
-  '🌟 لا تفكر بالساعة، فكر بالصفحة اللي جدامك',
-  '🧠 عقلك يتعلم أسرع وانت مركّز — كمّل',
-  '🏆 كل جلسة صغيرة تبني نجاحك الكبير',
-  '☕ خذ نفس عميق وكمّل، انت بالطريق الصح',
-  '📈 شوف تقدمك بالحلقة فوق — راح تكمّل الدورة!'
-];
-let motivIdx = 0;
-function rotateMotiv(){
-  const el = G('timer-motiv');
-  if (!el) return;
-  motivIdx = (motivIdx + 1) % STUDY_MOTIV_MSGS.length;
-  el.style.animation = 'none';
-  void el.offsetWidth;
-  el.style.animation = '';
-  el.textContent = STUDY_MOTIV_MSGS[motivIdx];
-}
-
-const TIMER_MILESTONE_MSGS = [
-  '🎉 ربع ساعة مركّزة! استمر كذا',
-  '🔥 نص ساعة إنجاز! انت تتسارع',
-  '💥 45 دقيقة قوة! ما تكدر توقف هسه',
-  '🏆 ساعة كاملة! وحش التسويف يرتجف منك 😤'
-];
-
-function updateTimerRing() {
-  const arc = G('timer-arc');
-  if (!arc) return;
-
-  let percent;
-  if (sessionMode && sessionTarget > 0) {
-    percent = Math.min(1, studySec / sessionTarget);
-  } else {
-    percent = (studySec % 3600) / 3600; // دورة كل ساعة
-  }
-  arc.style.strokeDashoffset = TIMER_CIRC * (1 - percent);
-
-  const withinHour  = studySec % 3600;
-  const quarterIdx  = Math.floor(withinHour / 900); // 0..3 ضمن الساعة الحالية
-  for (let i = 0; i < 4; i++) {
-    const dot = G('tq-' + i);
-    if (dot) dot.classList.toggle('done', i < quarterIdx);
-  }
-
-  const totalQuarters = Math.floor(studySec / 900);
-  if (totalQuarters > lastQuarterHit && studySec > 0) {
-    lastQuarterHit = totalQuarters;
-    arc.classList.remove('milestone-pop');
-    void arc.offsetWidth;
-    arc.classList.add('milestone-pop');
-    const msg = TIMER_MILESTONE_MSGS[(totalQuarters - 1) % 4];
-    if (msg) toast(msg, 'ok');
-  }
-}
-
-function resetTimerMotivation() {
-  // نضبط عداد الأرباع حسب الوقت الحالي فعلاً (يفيد عند استئناف جلسة) بدل ما نصفره دايماً
-  lastQuarterHit = Math.floor(studySec / 900);
-  motivIdx = 0;
-  const el = G('timer-motiv');
-  if (el) el.textContent = STUDY_MOTIV_MSGS[0];
-  if (studySec === 0) {
-    for (let i = 0; i < 4; i++) { const dot = G('tq-'+i); if (dot) dot.classList.remove('done'); }
-    const arc = G('timer-arc');
-    if (arc) { arc.style.transition = 'none'; arc.style.strokeDashoffset = TIMER_CIRC; void arc.offsetWidth; arc.style.transition = ''; }
-  }
 }
 function flash(t){ const e=G('pts-flash'); e.textContent=t; e.classList.add('on'); setTimeout(()=>e.classList.remove('on'),2200); }
 
@@ -2181,7 +2161,6 @@ input,select,.auth-form input{ border-radius:8px !important; }
 .sq-hero{ background:var(--c1) !important; border:1px solid var(--br) !important; border-radius:var(--r) !important; }
 .sq-hero::after{ display:none !important; }
 .sq-big{ color:var(--ink) !important; }
-.ref-card{ background:var(--c1) !important; border:1px solid var(--br) !important; border-radius:var(--r) !important; }
 .code-pill{ border:1px solid var(--br) !important; border-radius:8px !important; }
 .sbox,.stat-card,.goal-item,.badge-row{ border-radius:var(--r) !important; }
 .sbox::after,.stat-card::before{ display:none !important; }
@@ -2208,7 +2187,7 @@ input,select,.auth-form input{ border-radius:8px !important; }
 .mood-btn:hover{ transform:none !important; }
 .mood-modal-overlay,.session-modal,.share-modal{ backdrop-filter:none !important; }
 
-.ad-banner{ display:none !important; } /* البانر الإعلاني المتحرك يخالف الاتجاه الجديد الهادئ */
+.ad-banner{ display:none !important; }
 
 .bot-msg-me{ background:var(--accent) !important; color:var(--bg) !important; }
 </style>
@@ -2319,8 +2298,6 @@ body::before{content:'';position:fixed;inset:0;pointer-events:none;z-index:0;
 .auth-switch{text-align:center;font-size:.85rem;color:var(--ink2);margin-top:1.3rem}
 .auth-switch a{color:var(--gold);text-decoration:none;font-weight:700;cursor:pointer}
 .auth-switch a:hover{text-decoration:underline}
-.auth-or{display:flex;align-items:center;gap:.6rem;margin:.85rem 0;color:var(--ink3);font-size:.72rem}
-.auth-or::before,.auth-or::after{content:'';flex:1;height:1px;background:var(--br)}
 
 .card{background:var(--c1);border:1px solid var(--br);
   border-radius:4px 16px 4px 4px;padding:1.35rem;
@@ -2384,12 +2361,6 @@ select option{background:var(--c2)}
 .sq-big{font-size:1.75rem;font-weight:900;color:var(--gold);margin-bottom:.3rem;line-height:1.2;font-family:'Cairo',sans-serif}
 .sq-meta{font-size:.75rem;color:var(--ink3);display:flex;align-items:center;justify-content:center;gap:.5rem}
 .dot{width:3px;height:3px;border-radius:50%;background:var(--ink3)}
-.ref-card{background:linear-gradient(135deg,rgba(var(--accent-rgb),.14),var(--c2));border:1px solid rgba(var(--accent-rgb),.3);margin-bottom:.9rem}
-.ref-stats-row{display:flex;gap:.6rem;margin:.5rem 0 .7rem}
-.ref-stat{flex:1;background:var(--c1);border-radius:12px;padding:.6rem;text-align:center;border:1px solid var(--br)}
-.ref-stat-n{display:block;font-size:1.3rem;font-weight:900;color:var(--gold)}
-.ref-stat-l{display:block;font-size:.68rem;color:var(--ink3);margin-top:.15rem}
-.ref-hint{font-size:.76rem;color:var(--ink2);line-height:1.6;margin-bottom:.7rem}
 .code-pill{display:inline-flex;align-items:center;gap:.65rem;background:var(--c2);
   border:1.5px dashed rgba(255,107,53,.25);border-radius:9px;padding:.5rem 1rem;margin:.75rem 0 .1rem}
 .cp-lbl{font-size:.68rem;color:var(--ink3)}
@@ -2420,13 +2391,11 @@ select option{background:var(--c2)}
   width:60%;height:3px;border-radius:3px;background:linear-gradient(90deg,transparent,var(--gold),transparent);
   box-shadow:0 0 8px rgba(var(--accent-rgb),.7)}
 
-/* ══ CHALLENGES ══ */
 .challenge-card{background:linear-gradient(135deg, rgba(21,14,32,.85), rgba(31,21,48,.85));
   border:1.5px solid var(--br);border-radius:4px 18px 4px 4px;padding:1.1rem;margin-bottom:.7rem;
   animation:fadeUp .35s ease both;position:relative;overflow:hidden;}
 .challenge-card.winning{border-color:rgba(74,222,128,.35)}
 .challenge-card.losing{border-color:rgba(248,113,113,.35)}
-
 .chal-hd{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:.8rem;gap:.5rem;flex-wrap:wrap}
 .chal-teams{display:flex;align-items:center;gap:.4rem;flex:1;min-width:0;font-size:.8rem}
 .ct-badge{font-size:1.3rem;flex-shrink:0}
@@ -2434,7 +2403,6 @@ select option{background:var(--c2)}
 .ct-vs{font-weight:900;color:var(--ink3);font-size:.7rem;margin:0 .2rem}
 .chal-status{font-size:.7rem;font-weight:700;padding:.4rem .7rem;border-radius:16px;white-space:nowrap;flex-shrink:0;
   background:rgba(251,191,36,.12);color:var(--amber);border:1px solid rgba(251,191,36,.25)}
-
 .chal-score{display:flex;justify-content:space-between;align-items:center;gap:.6rem;margin-bottom:.8rem;
   background:var(--c3);border-radius:9px;padding:.8rem;border:1px solid rgba(255,255,255,.03)}
 .cs-unit{text-align:center}
@@ -2443,9 +2411,7 @@ select option{background:var(--c2)}
 .cs-diff{flex:1;text-align:center;font-size:.95rem;font-weight:800;
   padding:.5rem;border-radius:8px;background:rgba(248,113,113,.1);color:var(--red);}
 .cs-diff.leading{background:rgba(74,222,128,.1);color:var(--green)}
-
 .chal-time{font-size:.8rem;color:var(--ink2);margin-bottom:.6rem;display:flex;align-items:center;gap:.3rem}
-
 .btn-action{background:linear-gradient(135deg,var(--green),#16a34a);color:#fff;font-size:.75rem;
   padding:.5rem 1rem;border-radius:8px;border:none;cursor:pointer;font-family:'Tajawal',sans-serif;font-weight:700;
   width:100%;transition:all .18s;}
@@ -2530,55 +2496,79 @@ select option{background:var(--c2)}
 .as-nm{font-size:.88rem;font-weight:700;color:var(--ink)}
 .as-info{display:flex;justify-content:space-between;font-size:.75rem;color:var(--ink3);margin-bottom:.6rem}
 
+/* ══════════════════════════════════════════════
+   عداد الدراسة — تصميم جديد: بطاقة إنجاز حية
+   حلقة تقدم كل ساعة + شارات نمو + نقاط لحظية + رسائل تحفيز متجددة
+   ══════════════════════════════════════════════ */
 #timer-box{display:none;flex-direction:column;align-items:center;justify-content:center;
-  background:linear-gradient(160deg,rgba(10,18,32,.98),rgba(16,26,44,.98));
-  border-radius:26px;padding:1.5rem 1.2rem 1.3rem;margin-bottom:.8rem;
-  border:1px solid rgba(255,107,53,.22);position:relative;overflow:hidden;
-  box-shadow:0 0 50px rgba(255,107,53,.09), 0 20px 60px rgba(0,0,0,.5),inset 0 0 40px rgba(255,107,53,.04);}
+  background:linear-gradient(165deg,rgba(255,107,53,.10),rgba(10,18,32,.98) 45%,rgba(16,26,44,.98));
+  border-radius:26px;padding:1.9rem 1.3rem 1.6rem;margin-bottom:.8rem;
+  border:1px solid rgba(255,107,53,.25);position:relative;overflow:hidden;
+  box-shadow:0 0 60px rgba(255,107,53,.10), 0 20px 60px rgba(0,0,0,.5),inset 0 0 40px rgba(255,107,53,.05);}
 #timer-box::before{content:'';position:absolute;inset:0;
-  background:radial-gradient(ellipse at 50% 20%,rgba(255,107,53,.11) 0%,transparent 60%);pointer-events:none}
+  background:radial-gradient(ellipse at 50% 10%,rgba(255,107,53,.14) 0%,transparent 55%);pointer-events:none}
 #timer-box::after{content:'';position:absolute;bottom:0;left:0;right:0;height:1px;
-  background:linear-gradient(90deg,transparent,rgba(255,107,53,.3),transparent)}
-.timer-motiv{position:relative;z-index:1;font-size:.8rem;font-weight:700;color:var(--teal);
-  text-align:center;margin-bottom:.9rem;min-height:2.2em;display:flex;align-items:center;justify-content:center;
-  padding:0 .5rem;line-height:1.45;animation:motivIn .4s ease both}
-@keyframes motivIn{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:translateY(0)}}
+  background:linear-gradient(90deg,transparent,rgba(255,107,53,.35),transparent)}
+
+.timer-live-chip{display:flex;align-items:center;gap:.4rem;background:rgba(239,68,68,.12);
+  border:1px solid rgba(239,68,68,.3);color:#f87171;font-size:.68rem;font-weight:800;
+  padding:.3rem .8rem;border-radius:20px;margin-bottom:1.1rem;position:relative;z-index:1;
+  font-family:'Tajawal',sans-serif;letter-spacing:.3px}
+.timer-live-dot{width:6px;height:6px;border-radius:50%;background:#f87171;animation:liveBlink 1.4s ease-in-out infinite}
+@keyframes liveBlink{0%,100%{opacity:1}50%{opacity:.25}}
+
 .timer-ring-wrap{position:relative;display:flex;align-items:center;justify-content:center;
-  width:212px;height:212px;margin:0 auto .9rem}
-.timer-ring{position:absolute;inset:0;width:100%;height:100%;transform:rotate(-90deg)}
-.timer-track{fill:none;stroke:rgba(255,255,255,.06);stroke-width:9}
-.timer-fill{fill:none;stroke:var(--gold);stroke-width:9;stroke-linecap:round;
-  stroke-dasharray:552.9;stroke-dashoffset:552.9;
-  filter:drop-shadow(0 0 8px rgba(255,107,53,.75));transition:stroke-dashoffset .9s ease}
-.timer-fill.milestone-pop{animation:ringPop .5s ease}
-@keyframes ringPop{0%{filter:drop-shadow(0 0 8px rgba(255,107,53,.75))}
-  50%{filter:drop-shadow(0 0 22px rgba(255,215,120,1))}
-  100%{filter:drop-shadow(0 0 8px rgba(255,107,53,.75))}}
-.timer-pulse-ring{position:absolute;width:170px;height:170px;border-radius:50%;
-  border:2px solid rgba(255,107,53,.12);animation:timerPulse 2.2s ease-in-out infinite;pointer-events:none}
-@keyframes timerPulse{0%,100%{transform:scale(1);opacity:.5}50%{transform:scale(1.06);opacity:.15}}
-.timer-inner{display:flex;flex-direction:column;align-items:center;gap:.25rem;position:relative;z-index:1}
-.timer-label-top{font-size:.72rem;font-weight:700;color:var(--gold);letter-spacing:.8px;
-  text-transform:uppercase;opacity:.8;font-family:'Tajawal',sans-serif}
-.timer-label-bot{font-size:.65rem;color:var(--ink3);letter-spacing:.5px;font-family:'Tajawal',sans-serif}
-#clock{font-family:'IBM Plex Mono',monospace;font-size:clamp(2rem,7.6vw,2.6rem);font-weight:600;color:var(--gold);
-  letter-spacing:4px;text-shadow:0 0 30px rgba(255,107,53,.55),0 0 70px rgba(255,107,53,.18),0 0 4px rgba(255,107,53,.9);
+  width:180px;height:180px;margin-bottom:.6rem}
+.timer-ring-svg{width:100%;height:100%;transform:rotate(-90deg)}
+.timer-ring-track{fill:none;stroke:rgba(255,255,255,.06);stroke-width:7}
+.timer-ring-fill{fill:none;stroke:url(#timerGoldGrad);stroke-width:7;stroke-linecap:round;
+  stroke-dasharray:339.3;stroke-dashoffset:339.3;transition:stroke-dashoffset 1s linear}
+.timer-pulse-ring{position:absolute;width:180px;height:180px;border-radius:50%;
+  border:2px solid rgba(255,107,53,.14);animation:timerPulse 2.4s ease-in-out infinite;pointer-events:none}
+@keyframes timerPulse{0%,100%{transform:scale(1);opacity:.5}50%{transform:scale(1.055);opacity:.15}}
+.timer-inner{display:flex;flex-direction:column;align-items:center;gap:.2rem;position:relative;z-index:1}
+.timer-label-top{font-size:.7rem;font-weight:700;color:var(--gold);letter-spacing:.6px;
+  max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  text-transform:none;opacity:.9;font-family:'Tajawal',sans-serif}
+#clock{font-family:'IBM Plex Mono',monospace;font-size:clamp(2rem,8vw,2.5rem);font-weight:600;color:var(--gold);
+  letter-spacing:3px;text-shadow:0 0 30px rgba(255,107,53,.55),0 0 70px rgba(255,107,53,.18),0 0 4px rgba(255,107,53,.9);
   position:relative;z-index:1;line-height:1.1}
-.timer-quarters{display:flex;align-items:center;justify-content:center;gap:.4rem;position:relative;z-index:1;margin-bottom:1rem}
-.timer-quarter-dot{width:9px;height:9px;border-radius:50%;background:rgba(255,255,255,.08);
-  border:1px solid rgba(255,255,255,.12);transition:all .3s ease}
-.timer-quarter-dot.done{background:var(--gold);border-color:var(--gold);
-  box-shadow:0 0 10px rgba(255,107,53,.7);transform:scale(1.15)}
-.timer-quarter-lbl{font-size:.62rem;color:var(--ink3);letter-spacing:.4px}
-.timer-controls{display:flex;align-items:center;justify-content:center;gap:.8rem;position:relative;z-index:1}
-.timer-pause-btn{width:48px;height:48px;border-radius:50%;border:2px solid rgba(255,107,53,.35);
-  background:rgba(255,107,53,.1);color:var(--gold);font-size:1.15rem;cursor:pointer;
-  display:flex;align-items:center;justify-content:center;transition:all .2s;
-  box-shadow:0 0 14px rgba(255,107,53,.1)}
-.timer-pause-btn:hover{background:rgba(255,107,53,.2);border-color:var(--gold);
-  box-shadow:0 0 20px rgba(255,107,53,.25);transform:scale(1.08)}
-.timer-pause-btn:not(.paused-state){background:rgba(45,212,191,.1);border-color:rgba(45,212,191,.35);color:var(--teal)}
-.timer-pause-btn:not(.paused-state):hover{background:rgba(45,212,191,.2);border-color:var(--teal)}
+.timer-label-bot{font-size:.62rem;color:var(--ink3);letter-spacing:.5px;font-family:'Tajawal',sans-serif}
+
+/* شارات نمو الساعات — كل ساعة كاملة تفتح رمز جديد */
+.timer-milestones{display:flex;align-items:center;justify-content:center;gap:.4rem;
+  flex-wrap:wrap;margin:.9rem 0 .3rem;position:relative;z-index:1;min-height:26px}
+.tm-dot{width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;
+  font-size:.85rem;transition:all .35s cubic-bezier(.34,1.56,.64,1)}
+.tm-dot.done{background:rgba(255,107,53,.16);border:1.5px solid rgba(255,107,53,.45);
+  box-shadow:0 0 10px rgba(255,107,53,.3);animation:milestonePop .4s ease}
+.tm-dot.next{background:transparent;border:1.5px dashed rgba(255,255,255,.15);opacity:.4}
+@keyframes milestonePop{0%{transform:scale(.4);opacity:0}60%{transform:scale(1.2)}100%{transform:scale(1);opacity:1}}
+
+/* شريحة النقاط اللحظية */
+.timer-livepts{font-size:.82rem;font-weight:800;color:var(--gold);background:rgba(255,107,53,.08);
+  border:1px solid rgba(255,107,53,.2);border-radius:20px;padding:.35rem .95rem;margin-bottom:.7rem;
+  position:relative;z-index:1;font-family:'IBM Plex Mono',monospace;letter-spacing:.3px}
+
+/* رسالة تحفيزية متجددة */
+.timer-motivate{font-size:.76rem;color:var(--ink2);text-align:center;line-height:1.6;
+  max-width:260px;position:relative;z-index:1;min-height:2.4em;padding:0 .5rem;
+  transition:opacity .3s ease}
+
+.timer-controls{display:flex;align-items:center;justify-content:center;gap:.7rem;
+  position:relative;z-index:1;margin-top:1rem;width:100%}
+.timer-pause-btn{flex:1;max-width:220px;display:flex;align-items:center;justify-content:center;gap:.4rem;
+  height:44px;border-radius:22px;border:1.5px solid rgba(45,212,191,.35);
+  background:rgba(45,212,191,.1);color:var(--teal);font-size:.82rem;font-weight:800;cursor:pointer;
+  transition:all .2s;font-family:'Tajawal',sans-serif;
+  box-shadow:0 0 14px rgba(45,212,191,.08)}
+.timer-pause-btn:hover{background:rgba(45,212,191,.18);border-color:var(--teal);
+  box-shadow:0 0 20px rgba(45,212,191,.2);transform:translateY(-1px)}
+.timer-pause-btn.paused-state{border-color:rgba(255,107,53,.35);background:rgba(255,107,53,.1);color:var(--gold);
+  box-shadow:0 0 14px rgba(255,107,53,.08)}
+.timer-pause-btn.paused-state:hover{background:rgba(255,107,53,.18);border-color:var(--gold);
+  box-shadow:0 0 20px rgba(255,107,53,.2)}
+
 .pts-rule{font-size:.74rem;color:var(--ink3);text-align:center;margin-top:.5rem;
   display:flex;align-items:center;justify-content:center;gap:.4rem}
 .pts-rule::before,.pts-rule::after{content:'';flex:1;height:1px;background:var(--br)}
@@ -2663,7 +2653,7 @@ select option{background:var(--c2)}
 
 @media(max-width:380px){
   .h-title{font-size:1.7rem} .sq-big{font-size:1.4rem}
-  #clock{font-size:2.2rem;letter-spacing:3px} .sv{font-size:1.3rem}
+  #clock{font-size:1.9rem;letter-spacing:2px} .sv{font-size:1.3rem}
   .auth-title{font-size:1.5rem}
   .tabs{grid-template-columns:repeat(5,1fr)}
   .tab{font-size:.53rem;padding:.45rem .1rem}
@@ -2674,6 +2664,8 @@ select option{background:var(--c2)}
   .wrap{padding:.8rem .6rem 6rem}
   .card{padding:1rem}
   .sq-hero{padding:1.2rem 1rem}
+  .timer-ring-wrap{width:150px;height:150px}
+  .timer-pulse-ring{width:150px;height:150px}
 }
 
 .study-mode-row{display:grid;grid-template-columns:1fr 1fr;gap:.5rem;margin-bottom:.9rem}
@@ -2681,8 +2673,7 @@ select option{background:var(--c2)}
   color:var(--ink2);font-family:'Tajawal',sans-serif;font-size:.87rem;font-weight:700;
   padding:.8rem;cursor:pointer;transition:all .2s;display:flex;align-items:center;justify-content:center;gap:.45rem}
 .smode-btn svg{flex-shrink:0;transition:stroke .2s}
-.smode-btn.on{background:rgba(255,107,53,.1);border-color:rgba(255,107,53,.45);color:var(--gold);
-  box-shadow:0 0 0 1px rgba(255,107,53,.15) inset,0 4px 16px rgba(255,107,53,.18)}
+.smode-btn.on{background:rgba(255,107,53,.1);border-color:rgba(255,107,53,.45);color:var(--gold)}
 .smode-btn.on svg{stroke:var(--gold)}
 
 /* ══ POMODORO ══ */
@@ -2812,15 +2803,12 @@ select option{background:var(--c2)}
 .bot-paywall-sub{font-size:.82rem;color:var(--ink2);line-height:1.7;max-width:300px;margin:0 auto}
 
 </style>
-
 <style>
 /* ══ البانر الإعلاني المتحرك ══ */
 .ad-banner{
   width:100%;overflow:hidden;position:relative;z-index:400;
   background:#07090f;border-bottom:1px solid rgba(var(--accent-rgb),.18);
 }
-
-/* ── شريط الإعلان المتحرك ── */
 .ad-scroll-bar{
   padding:.52rem 0;background:linear-gradient(90deg,
     rgba(var(--accent-rgb),.08),rgba(var(--accent-rgb),.14),rgba(var(--accent-rgb),.08));
@@ -2883,14 +2871,13 @@ select option{background:var(--c2)}
   margin-bottom:.3rem;line-height:1.5;
   animation:fadeIn .3s ease;
 }
-@keyframes fadeIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}</style>
-
+@keyframes fadeIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
+</style>
 
 </head>
 <body>
 
 <!-- ══ البانر الإعلاني ══ -->
-
 <div class="ad-banner">
   <div class="ad-scroll-bar" onclick="window.open('https://mizaniq.online','_blank')">
     <div class="ad-track">
@@ -2937,7 +2924,6 @@ select option{background:var(--c2)}
 </header>
 
 <!-- ══ مودال الثيمات ══ -->
-
 <div class="theme-modal" id="theme-modal" onclick="closeThemeModal(event)">
   <div class="theme-sheet">
     <div class="theme-sheet-hd">
@@ -3018,7 +3004,6 @@ select option{background:var(--c2)}
 <div class="wrap">
 
 <!-- ══ AUTH ══ -->
-
 <div id="s-auth">
   <div class="auth-container">
     <div class="auth-hero">
@@ -3070,7 +3055,6 @@ select option{background:var(--c2)}
 </div>
 
 <!-- ══ REGISTER ══ -->
-
 <div id="s-register" style="display:none">
   <div class="hero">
     <span class="h-icon">🛡️</span>
@@ -3091,7 +3075,6 @@ select option{background:var(--c2)}
 </div>
 
 <!-- ══ LOBBY ══ -->
-
 <div id="s-lobby" style="display:none">
   <div class="lw">
     <div class="lw-n" id="lobby-hello">مرحباً 👋</div>
@@ -3127,7 +3110,6 @@ select option{background:var(--c2)}
 </div>
 
 <!-- ══ SQUAD ══ -->
-
 <div id="s-squad" style="display:none">
 
   <div class="sq-hero">
@@ -3144,20 +3126,6 @@ select option{background:var(--c2)}
         نسخ
       </button>
     </div>
-  </div>
-
-  <div class="card ref-card">
-    <div class="sec-ttl">🎯 ادعُ رفگاتك واربح نقاط</div>
-    <div class="ref-stats-row">
-      <div class="ref-stat"><span class="ref-stat-n" id="ref-count">0</span><span class="ref-stat-l">صديق دعيته</span></div>
-      <div class="ref-stat"><span class="ref-stat-n" id="ref-pts">0</span><span class="ref-stat-l">نقطة من الدعوات</span></div>
-    </div>
-    <div class="ref-hint">كل صديق يسجل عن طريقك ياخذ <b>50</b> نقطة هدية، وانت تاخذ <b>100</b> نقطة فوراً! ⚡</div>
-    <div class="code-pill" style="width:100%;box-sizing:border-box">
-      <div style="overflow:hidden"><div class="cp-lbl">رابط دعوتك</div><div class="cp-val" id="ref-link-val" style="font-size:.7rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block">—</div></div>
-      <button class="cp-btn" onclick="copyReferralLink()">نسخ</button>
-    </div>
-    <button class="btn btn-p" style="margin-top:.6rem" onclick="shareReferralLink()">📤 شارك رابط الدعوة</button>
   </div>
 
   <div class="s4">
@@ -3219,7 +3187,6 @@ select option{background:var(--c2)}
   </div>
 
   <!-- TAB: TEAM -->
-
   <div id="panel-team">
     <div id="members-wrap"></div>
     <button id="leave-squad-btn" class="btn btn-danger" onclick="leaveSquad()" style="display:none;margin-top:.5rem">
@@ -3229,9 +3196,7 @@ select option{background:var(--c2)}
   </div>
 
   <!-- TAB: STUDY -->
-
   <div id="panel-study" style="display:none">
-
 
 <!-- study mode switcher -->
 <div class="study-mode-row">
@@ -3318,29 +3283,38 @@ select option{background:var(--c2)}
     </div>
   </div>
 
+  <!-- ══ عداد الدراسة — التصميم الجديد ══ -->
   <div id="timer-box">
-    <div class="timer-motiv" id="timer-motiv">🔥 يلا نبدأ! كل دقيقة تقربك من هدفك</div>
+    <svg width="0" height="0" style="position:absolute">
+      <defs>
+        <linearGradient id="timerGoldGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stop-color="#ffb366"/>
+          <stop offset="100%" stop-color="var(--gold)"/>
+        </linearGradient>
+      </defs>
+    </svg>
+
+    <div class="timer-live-chip"><span class="timer-live-dot"></span> جلسة مباشرة</div>
+
     <div class="timer-ring-wrap">
-      <svg class="timer-ring" viewBox="0 0 200 200">
-        <circle class="timer-track" cx="100" cy="100" r="88"/>
-        <circle class="timer-fill"  cx="100" cy="100" r="88" id="timer-arc"/>
-      </svg>
       <div class="timer-pulse-ring"></div>
+      <svg class="timer-ring-svg" viewBox="0 0 120 120">
+        <circle class="timer-ring-track" cx="60" cy="60" r="54"/>
+        <circle class="timer-ring-fill" id="timer-progress-arc" cx="60" cy="60" r="54"/>
+      </svg>
       <div class="timer-inner">
         <div class="timer-label-top" id="timer-subject-lbl">📚 جاري الدراسة</div>
         <div id="clock">00:00:00</div>
         <div class="timer-label-bot">الوقت المنقضي</div>
       </div>
     </div>
-    <div class="timer-quarters" id="timer-quarters">
-      <span class="timer-quarter-dot" id="tq-0"></span>
-      <span class="timer-quarter-dot" id="tq-1"></span>
-      <span class="timer-quarter-dot" id="tq-2"></span>
-      <span class="timer-quarter-dot" id="tq-3"></span>
-      <span class="timer-quarter-lbl">ربع ساعة لكل نقطة ⚡</span>
-    </div>
+
+    <div class="timer-milestones" id="timer-milestones"></div>
+    <div class="timer-livepts" id="timer-livepts">⚡ 0 نقطة حتى الآن</div>
+    <div class="timer-motivate" id="timer-motivate">💬 ابدأ وشوف كيف الوقت يمر بسرعة، خطوة خطوة توصل 💪</div>
+
     <div class="timer-controls">
-      <button id="pause-btn" class="timer-pause-btn" onclick="pauseResume()" style="display:none">⏸</button>
+      <button id="pause-btn" class="timer-pause-btn" onclick="pauseResume()" style="display:none">⏸ إيقاف مؤقت</button>
     </div>
   </div>
   <button id="study-btn" class="btn btn-study" onclick="toggleStudy()">
@@ -3364,7 +3338,6 @@ select option{background:var(--c2)}
   </div>
 
   <!-- TAB: RANK -->
-
   <div id="panel-rank" style="display:none">
     <div class="rank-tabs">
       <button class="rank-tab on" id="rtab-squads"   onclick="switchRankTab('squads')">🛡️ الفرق</button>
@@ -3384,7 +3357,6 @@ select option{background:var(--c2)}
   </div>
 
   <!-- TAB: DAILY GOALS -->
-
   <div id="panel-challenges" style="display:none">
 
     <!-- وحش التسويف الشخصي -->
@@ -3504,7 +3476,6 @@ select option{background:var(--c2)}
   </div>
 
   <!-- TAB: LECTURES -->
-
   <div id="panel-lectures" style="display:none">
     <div class="card" style="margin-bottom:.9rem">
       <div class="sec-ttl">
@@ -3536,7 +3507,6 @@ select option{background:var(--c2)}
   </div>
 
   <!-- TAB: ASSISTANT -->
-
   <div id="panel-assistant" style="display:none">
     <div class="card bot-panel-card">
       <div class="sec-ttl">
@@ -3595,7 +3565,6 @@ select option{background:var(--c2)}
 </div>
 
 <!-- MODAL: SESSION -->
-
 <div id="session-modal" class="session-modal">
   <div class="session-content">
     <div class="session-hd">
@@ -3619,7 +3588,6 @@ select option{background:var(--c2)}
 </div>
 
 <!-- MODAL: SHARE CARD (STORY) -->
-
 <div id="share-modal" class="session-modal">
   <div class="session-content" style="text-align:center">
     <div class="session-hd">
@@ -3653,7 +3621,7 @@ select option{background:var(--c2)}
       <div id="sc-name" style="font-size:14px;color:#9C9CA3;margin-top:22px">—</div>
     </div>
     <div style="width:100%;border-top:1px solid rgba(255,255,255,.1);padding-top:16px">
-      <div style="font-size:14px;color:#F2F2F0">انضم واربح 50 نقطة هدية 🎁</div>
+      <div style="font-size:14px;color:#F2F2F0">استمر مع ميزان 💪</div>
       <div id="sc-link" style="font-family:'IBM Plex Mono',monospace;font-size:13px;color:#5B7FFF;margin-top:6px;word-break:break-all">mizaniq.online</div>
     </div>
   </div>
