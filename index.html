@@ -430,16 +430,41 @@ let _myUserData  = null; // ← كاش لبيانات users/{uid} حتى ما ن
 
 // ← نحفظ دوال إلغاء الاشتراك (unsubscribe) لتجنب تراكم listeners
 // كل مرة ينصدي bootSquad (عند تغيير الفريق) لازم نقفل القديم أول
-let _unsubSquadDoc = null;
+let _squadRefreshInterval = null;
 let _lbRefreshInterval = null;
+let _unsubMyDoc = null; // ← إصلاح تسريب القراءات: كان listener المستخدم الشخصي ينضاف من جديد كل مرة تنصدي bootSquad() بدون ما ينسكر القديم
+
+// ← نجمع كل intervals الحية بمكان وحد، حتى نقدر نوقفها كلها لمن التطبيق يروح للخلفية
+// (تبويب مسكر بالخلفية بالموبايل يضل يسحب قراءات كل دقيقة بدون فايدة — هدر كبير بالحد المجاني)
+let _allPollIntervals = [];
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    _allPollIntervals.forEach(id => clearInterval(id));
+    _allPollIntervals = [];
+  } else if (squadId) {
+    bootSquad(); // نرجع نفعّل التحديث الدوري ونسحب أحدث نسخة فور ما يرجع الطالب للتطبيق
+  }
+});
 
 function bootSquad() {
   // نقفل أي listeners/intervals قديمة قبل ما نفتح جديدة
-  if (_unsubSquadDoc)      { _unsubSquadDoc(); _unsubSquadDoc = null; }
-  if (_lbRefreshInterval)  { clearInterval(_lbRefreshInterval); _lbRefreshInterval = null; }
+  if (_squadRefreshInterval) { clearInterval(_squadRefreshInterval); _squadRefreshInterval = null; }
+  if (_lbRefreshInterval)    { clearInterval(_lbRefreshInterval); _lbRefreshInterval = null; }
+  if (_unsubMyDoc)           { _unsubMyDoc(); _unsubMyDoc = null; }
+  _allPollIntervals = [];
 
   const membersCache = {};
-  _unsubSquadDoc = onSnapshot(doc(db,'squads',squadId), async snap => {
+
+  // ← إصلاح جوهري لتقليل القراءات: كان onSnapshot حي على مستند الفريق —
+  // يعني أي تحديث نقطة لأي عضو بالفريق يفجّر قراءة فورية لكل الأعضاء المتصلين بنفس اللحظة.
+  // هذا كان أكبر مصدر استهلاك للحد المجاني اليومي. بدّلناها بقراءة واحدة عند فتح الشاشة
+  // + تحديث كل 45 ثانية بس (وتتوقف تماماً لو التطبيق بالخلفية، شوف visibilitychange فوق).
+  async function refreshSquad() {
+    if (!squadId) return;
+    let snap;
+    try { snap = await getDoc(doc(db,'squads',squadId)); }
+    catch(e) { console.error('squad load failed', e); return; }
+
     if (!snap.exists()) {
       await updateDoc(doc(db,'users',uid), { squadId: null }).catch(()=>{});
       squadId = null;
@@ -493,11 +518,17 @@ function bootSquad() {
         wrap.appendChild(d);
       }
     }
-  });
+  }
+  // نمسح الكاش كل تحديث دوري (مو أول مرة بس) حتى نلتقط تغيّر نقاط الأعضاء أيضاً
+  const _origRefreshSquad = refreshSquad;
+  async function refreshSquadFresh() { for (const k in membersCache) delete membersCache[k]; await _origRefreshSquad(); }
+  refreshSquad();
+  _squadRefreshInterval = setInterval(refreshSquadFresh, 45000);
+  _allPollIntervals.push(_squadRefreshInterval);
 
   // تصنيف الفرق — بدّلناها من onSnapshot حي (يتفعّل مع أي تحديث نقطة لأي فريق بأي مكان،
   // ويتضاعف مع عدد الطلاب المتصلين بنفس اللحظة = استهلاك قراءات هائل) إلى قراءة واحدة
-  // عند فتح الشاشة + تحديث كل دقيقة فقط. هذا يقلل القراءات بشكل كبير جداً.
+  // عند فتح الشاشة + تحديث كل 3 دقائق (بدل دقيقة وحدة) لتقليل القراءات أكثر.
   const lbQ = query(collection(db,'squads'), orderBy('totalPts','desc'), limit(20));
   async function refreshLeaderboard() {
     const el = G('lb-wrap');
@@ -518,7 +549,8 @@ function bootSquad() {
     } catch(e) { console.error('leaderboard load failed', e); }
   }
   refreshLeaderboard();
-  _lbRefreshInterval = setInterval(refreshLeaderboard, 60000); // تحديث كل دقيقة بدل الحي
+  _lbRefreshInterval = setInterval(refreshLeaderboard, 180000); // كل 3 دقائق بدل دقيقة
+  _allPollIntervals.push(_lbRefreshInterval);
 
   // تصنيف الأفراد - يُحمَّل مرة واحدة فقط عند الضغط على التاب
   let soloLoaded = false;
@@ -555,60 +587,8 @@ function bootSquad() {
     }
   };
 
-  // تصنيف قاتلي الوحش - الطلاب اللي خلصوا هدف الدراسة اليومي (8 ساعات) وقتلوا وحش اليوم
-  let monsterLbLoaded = false;
-  window.loadMonsterLeaderboard = async () => {
-    if (monsterLbLoaded) return;
-    monsterLbLoaded = true;
-    const el = G('lb-monster-wrap');
-    if (!el) return;
-    el.innerHTML = '<div class="lb-empty">جاري التحميل...</div>';
-    try {
-      // ← الإصلاح: نفلتر بحقل date داخل الاستعلام بدل سحب كل جلسات كل الطلاب من الأزل
-      const todayStr = new Date().toISOString().slice(0,10);
-      const q = query(collection(db,'sessions'), where('date','==',todayStr));
-      const snap = await getDocs(q);
-      const totals = {};
-      snap.forEach(d => {
-        const s = d.data();
-        if (!s.uid) return;
-        totals[s.uid] = (totals[s.uid]||0) + (s.seconds||0);
-      });
-      const slayers = Object.entries(totals)
-        .filter(([,sec]) => sec >= MONSTER_PERSONAL_GOAL_SEC)
-        .sort((a,b) => b[1]-a[1]);
-
-      el.innerHTML = '';
-      if (slayers.length === 0) {
-        el.innerHTML = '<div class="lb-empty">ما أحد قتل الوحش اليوم بعد — كن أول واحد! 👹⚔️</div>';
-        return;
-      }
-      const M = ['🥇','🥈','🥉'];
-      let rank = 0;
-      for (const [sUid, sec] of slayers) {
-        const uSnap = await getDoc(doc(db,'users',sUid));
-        if (!uSnap.exists()) continue;
-        const u  = uSnap.data();
-        rank++;
-        const me = sUid === uid;
-        const r  = getStudentRank(u.totalPts||0);
-        el.innerHTML += `<div class="lb-row${me?' mine':''}">
-          <span class="lb-pos">${M[rank-1]||'#'+rank}</span>
-          <div class="lb-mid">
-            <span class="lb-nm">👹⚔️ ${u.name||'طالب'}</span>
-            <span class="lb-ct">${r.icon} ${r.title} · ${u.branch==='علمي'?'🔬 علمي':'📖 أدبي'}</span>
-          </div>
-          <div class="lb-end"><span class="lb-p">🏆 قاتل الوحش</span><span class="lb-h">⏱${fmtH(sec)}</span></div>
-        </div>`;
-      }
-      if (rank === 0) el.innerHTML = '<div class="lb-empty">ما أحد قتل الوحش اليوم بعد — كن أول واحد! 👹⚔️</div>';
-    } catch(e) {
-      el.innerHTML = '<div class="lb-empty">خطأ في التحميل</div>';
-    }
-  };
-
   // بيانات المستخدم الشخصية
-  onSnapshot(doc(db,'users',uid), snap => {
+  _unsubMyDoc = onSnapshot(doc(db,'users',uid), snap => {
     if (!snap.exists()) return;
     const u = snap.data();
     _myUserData = u; // ← نخزنها بمتغير عام حتى نستخدمها بمكان ثاني بدل قراءة جديدة
@@ -1119,6 +1099,8 @@ async function flushPendingPts() {
         date: new Date().toISOString().slice(0,10)
       });
     } catch (e) {
+      // ← إصلاح: قبل هذا السطر ما كان يطبع أي شي، فيصير مستحيل نعرف سبب فشل حفظ النقاط
+      console.error('flushPendingPts failed for entry', entry, 'code:', e.code || e.message || e);
       // نعيد فقط هذا العنصر الفاشل للقائمة المعلقة، مو كل القائمة
       hadFailure = true;
       const stillPending = JSON.parse(localStorage.getItem('mizan_pending_pts') || '[]');
@@ -1238,12 +1220,9 @@ window.nativeShareCard = async () => {
 window.switchRankTab = tab => {
   G('rpanel-squads').style.display  = tab==='squads'  ? 'block' : 'none';
   G('rpanel-solo').style.display    = tab==='solo'    ? 'block' : 'none';
-  G('rpanel-monster').style.display = tab==='monster' ? 'block' : 'none';
   G('rtab-squads').classList.toggle('on',  tab==='squads');
   G('rtab-solo').classList.toggle('on',    tab==='solo');
-  G('rtab-monster').classList.toggle('on', tab==='monster');
-  if (tab === 'solo'    && typeof loadSoloLeaderboard === 'function')    loadSoloLeaderboard();
-  if (tab === 'monster' && typeof loadMonsterLeaderboard === 'function') loadMonsterLeaderboard();
+  if (tab === 'solo' && typeof loadSoloLeaderboard === 'function') loadSoloLeaderboard();
 };
 window.switchTab = tab => {
   ['team','study','lectures','rank','challenges','stats','assistant'].forEach(t => {
@@ -2632,7 +2611,7 @@ select option{background:var(--c2)}
 .toast.t-err {border-color:rgba(248,113,113,.35);color:var(--red)}
 .toast.t-warn{border-color:rgba(251,191,36,.35) ;color:var(--amber)}
 
-.rank-tabs{display:grid;grid-template-columns:1fr 1fr 1fr;gap:.3rem;background:var(--c1);
+.rank-tabs{display:grid;grid-template-columns:1fr 1fr;gap:.3rem;background:var(--c1);
   border:1px solid var(--br);border-radius:13px;padding:.3rem;margin-bottom:.9rem}
 .rank-tab{padding:.55rem .2rem;border-radius:9px;text-align:center;font-size:.74rem;font-weight:700;
   cursor:pointer;transition:all .18s;color:var(--ink3);border:none;background:none;font-family:'Tajawal',sans-serif;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -3342,17 +3321,12 @@ select option{background:var(--c2)}
     <div class="rank-tabs">
       <button class="rank-tab on" id="rtab-squads"   onclick="switchRankTab('squads')">🛡️ الفرق</button>
       <button class="rank-tab"   id="rtab-solo"     onclick="switchRankTab('solo')">👤 الأفراد</button>
-      <button class="rank-tab"   id="rtab-monster"  onclick="switchRankTab('monster')">👹 قاتلي الوحش</button>
     </div>
     <div id="rpanel-squads">
       <div id="lb-wrap"></div>
     </div>
     <div id="rpanel-solo" style="display:none">
       <div id="lb-solo-wrap"></div>
-    </div>
-    <div id="rpanel-monster" style="display:none">
-      <div style="font-size:.75rem;color:var(--ink3);margin-bottom:.6rem;padding:0 .2rem">الطلاب اللي درسوا 8 ساعات أو أكثر اليوم وقتلوا وحش التسويف 🔥</div>
-      <div id="lb-monster-wrap"></div>
     </div>
   </div>
 
